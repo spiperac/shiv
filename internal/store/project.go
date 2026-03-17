@@ -7,19 +7,15 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// Store holds the database connection and live update channel for a project.
 type Store struct {
 	db      *sql.DB
 	writeCh chan func() error
 	done    chan struct{}
 
-	// Updates receives each new Transaction as it is logged.
-	Updates chan Transaction
-
+	Updates   chan Transaction
 	Intercept *InterceptGate
 }
 
-// Open opens an existing .shiv file or creates a new one at path.
 func Open(path string) (*Store, error) {
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
@@ -43,21 +39,30 @@ func Open(path string) (*Store, error) {
 	return s, nil
 }
 
-// Close shuts down the store cleanly.
 func (s *Store) Close() error {
 	close(s.done)
+	close(s.Updates)
+	close(s.Intercept.queue)
 	return s.db.Close()
 }
 
-// write schedules fn on the single write goroutine and blocks until done.
 func (s *Store) write(fn func() error) error {
 	errCh := make(chan error, 1)
-	s.writeCh <- func() error {
+	select {
+	case s.writeCh <- func() error {
 		err := fn()
 		errCh <- err
 		return err
+	}:
+	case <-s.done:
+		return fmt.Errorf("store: closed")
 	}
-	return <-errCh
+	select {
+	case err := <-errCh:
+		return err
+	case <-s.done:
+		return fmt.Errorf("store: closed")
+	}
 }
 
 func (s *Store) writeLoop() {
@@ -66,7 +71,15 @@ func (s *Store) writeLoop() {
 		case fn := <-s.writeCh:
 			fn()
 		case <-s.done:
-			return
+			// Drain remaining writes before exit.
+			for {
+				select {
+				case fn := <-s.writeCh:
+					fn()
+				default:
+					return
+				}
+			}
 		}
 	}
 }

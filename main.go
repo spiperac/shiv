@@ -7,6 +7,7 @@ import (
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
+	"fyne.io/fyne/v2/dialog"
 
 	"github.com/shiv/internal/logger"
 	"github.com/shiv/internal/proxy"
@@ -42,6 +43,15 @@ func main() {
 			st.Close()
 			a.Quit()
 			return
+		}
+
+		if p.CA().Fresh() {
+			msg, err := p.CA().InstallCA()
+			if err != nil {
+				dialog.ShowError(fmt.Errorf("CA install failed — import it manually from your system config dir:\n%v", err), launchWin)
+			} else {
+				dialog.ShowInformation("CA Installed", msg+"\n\nRestart your browser for changes to take effect.", launchWin)
+			}
 		}
 
 		go func() {

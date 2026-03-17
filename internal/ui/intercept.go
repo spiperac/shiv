@@ -11,12 +11,13 @@ import (
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
+	"github.com/shiv/internal/logger"
 	"github.com/shiv/internal/store"
 )
 
 type interceptTab struct {
 	st      *store.Store
-	pending *store.PendingRequest // currently displayed request, nil if none
+	pending *store.PendingRequest
 
 	toggle  *widget.Check
 	editor  *widget.Entry
@@ -33,6 +34,13 @@ func (t *interceptTab) build() fyne.CanvasObject {
 	t.toggle = widget.NewCheck("Intercept ON", func(on bool) {
 		t.st.Intercept.SetEnabled(on)
 		if !on {
+			// If a request is waiting on Reply, forward it unmodified.
+			// Without this the proxy goroutine blocks forever.
+			if t.pending != nil {
+				p := t.pending
+				t.pending = nil
+				p.Reply <- store.Decision{Forward: true, Request: p.Request, Body: p.Body}
+			}
 			t.clearEditor()
 		}
 	})
@@ -67,17 +75,15 @@ func (t *interceptTab) build() fyne.CanvasObject {
 	return content
 }
 
-// watchQueue reads pending requests from the gate and shows them in the editor.
 func (t *interceptTab) watchQueue() {
 	for pending := range t.st.Intercept.Queue() {
-		p := pending // capture
+		p := pending
 		fyne.Do(func() {
 			t.showRequest(p)
 		})
 	}
 }
 
-// showRequest displays a pending request in the editor.
 func (t *interceptTab) showRequest(p *store.PendingRequest) {
 	t.pending = p
 	t.editor.Enable()
@@ -86,20 +92,19 @@ func (t *interceptTab) showRequest(p *store.PendingRequest) {
 	t.drop.Enable()
 }
 
-// decide sends the user's decision back to the waiting proxy goroutine.
 func (t *interceptTab) decide(forward bool) {
 	if t.pending == nil {
 		return
 	}
 	p := t.pending
+	rawText := t.editor.Text // capture BEFORE clearing
 	t.pending = nil
 	t.clearEditor()
 
 	if forward {
-		// Parse the (possibly edited) request text back into an http.Request.
-		req, body, err := parseRawRequest(t.editor.Text, p.Request)
+		req, body, err := parseRawRequest(rawText, p.Request)
 		if err != nil {
-			// If parsing fails, forward the original unmodified request.
+			logger.Error("intercept: parse edited request: %v — forwarding original", err)
 			req = p.Request
 			body = p.Body
 		}
@@ -116,7 +121,6 @@ func (t *interceptTab) clearEditor() {
 	t.drop.Disable()
 }
 
-// formatRawRequest formats an http.Request and body as a raw HTTP/1.1 string.
 func formatRawRequest(req *http.Request, body []byte) string {
 	var sb bytes.Buffer
 	path := req.URL.RequestURI()
@@ -137,22 +141,19 @@ func formatRawRequest(req *http.Request, body []byte) string {
 	return sb.String()
 }
 
-// parseRawRequest parses an edited raw HTTP request string back into an
-// http.Request. Falls back to the original request on any parse error.
 func parseRawRequest(raw string, original *http.Request) (*http.Request, []byte, error) {
 	req, err := http.ReadRequest(bufio.NewReader(bytes.NewBufferString(raw)))
 	if err != nil {
 		return nil, nil, err
 	}
 
-	// Restore scheme and host from original since http.ReadRequest strips them.
 	req.URL.Scheme = original.URL.Scheme
 	req.URL.Host = original.URL.Host
 	if req.Host == "" {
 		req.Host = original.Host
 	}
 
-	body := make([]byte, 0)
+	var body []byte
 	if req.Body != nil {
 		buf := new(bytes.Buffer)
 		buf.ReadFrom(req.Body)

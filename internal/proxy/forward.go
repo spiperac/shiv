@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"bytes"
 	"compress/flate"
 	"compress/gzip"
 	"fmt"
@@ -37,11 +38,9 @@ func forward(req *http.Request) (*http.Response, error) {
 	return resp, nil
 }
 
-// decompressBody decompresses the body if Content-Encoding is set.
-// Returns the original body if encoding is unknown or decompression fails.
 func decompressBody(header http.Header, body []byte) []byte {
 	ce := strings.ToLower(header.Get("Content-Encoding"))
-	r := strings.NewReader(string(body))
+	r := bytes.NewReader(body)
 	switch ce {
 	case "gzip":
 		gr, err := gzip.NewReader(r)
@@ -67,16 +66,12 @@ func decompressBody(header http.Header, body []byte) []byte {
 		}
 		return out
 	case "zstd":
-		// zstd not in stdlib — skip decompression, mark as binary
 		return body
 	}
 	return body
 }
 
-// isBinary returns true if the response body should not be stored or displayed.
-// Call this AFTER decompressBody — compressed text is not binary once decoded.
 func isBinary(header http.Header) bool {
-	// zstd we can't decompress — treat as binary
 	ce := strings.ToLower(header.Get("Content-Encoding"))
 	if ce == "zstd" {
 		return true

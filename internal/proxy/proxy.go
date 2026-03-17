@@ -12,14 +12,14 @@ import (
 	"github.com/shiv/internal/store"
 )
 
-// Proxy is an HTTP/HTTPS proxy server.
+const maxBodySize = 10 << 20 // 10 MB
+
 type Proxy struct {
 	addr  string
 	ca    *cert.CA
 	store *store.Store
 }
 
-// New creates a new Proxy. Loads (or generates) the CA on startup.
 func New(addr string, st *store.Store) (*Proxy, error) {
 	ca, err := cert.Load()
 	if err != nil {
@@ -28,20 +28,22 @@ func New(addr string, st *store.Store) (*Proxy, error) {
 	return &Proxy{addr: addr, ca: ca, store: st}, nil
 }
 
-// Start starts the proxy and blocks until it fails.
+func (p *Proxy) CA() *cert.CA {
+	return p.ca
+}
+
 func (p *Proxy) Start() error {
 	logger.Always("proxy listening on %s", p.addr)
 	return http.ListenAndServe(p.addr, p)
 }
 
-// ServeHTTP handles all incoming proxy requests.
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodConnect {
 		p.handleConnect(w, r)
 		return
 	}
 
-	reqBody, err := io.ReadAll(r.Body)
+	reqBody, err := io.ReadAll(io.LimitReader(r.Body, maxBodySize))
 	if err != nil {
 		http.Error(w, "failed to read request body", http.StatusBadRequest)
 		logger.Error("read request body: %v", err)
@@ -66,7 +68,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxBodySize))
 	if err != nil {
 		http.Error(w, "failed to read response body", http.StatusBadGateway)
 		logger.Error("read response body %s %s: %v", r.Method, r.URL, err)

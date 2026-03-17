@@ -35,6 +35,13 @@ type CA struct {
 	cert  *x509.Certificate
 	key   *rsa.PrivateKey
 	cache sync.Map // map[string]*tls.Certificate
+	fresh bool
+}
+
+// Fresh returns true if the CA was generated this run (not loaded from disk).
+// Use this to decide whether to attempt OS trust store installation.
+func (ca *CA) Fresh() bool {
+	return ca.fresh
 }
 
 // Dir returns the directory where Shiv stores the CA files.
@@ -175,7 +182,7 @@ func generate(keyPath, crtPath string) (*CA, error) {
 		return nil, err
 	}
 
-	return &CA{cert: parsed, key: key}, nil
+	return &CA{cert: parsed, key: key, fresh: true}, nil
 }
 
 func loadFromDisk(keyPath, crtPath string) (*CA, error) {

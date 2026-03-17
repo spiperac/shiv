@@ -34,8 +34,8 @@ type historyTab struct {
 	hasSelected bool
 }
 
-var tableColumns = []string{"ID", "Method", "Host", "Path", "Status", "Size", "Duration"}
-var columnWidths = []float32{60, 80, 200, 300, 70, 90, 90}
+var tableColumns = []string{"Method", "Host", "Path", "Status", "Size", "Duration"}
+var columnWidths = []float32{80, 200, 300, 70, 90, 90}
 
 func newHistoryTab(st *store.Store, win fyne.Window) fyne.CanvasObject {
 	h := &historyTab{st: st, win: win}
@@ -159,18 +159,16 @@ func (h *historyTab) build() fyne.CanvasObject {
 func (h *historyTab) cellText(tx store.Transaction, col int) string {
 	switch col {
 	case 0:
-		return fmt.Sprintf("%d", tx.ID)
-	case 1:
 		return tx.Method
-	case 2:
+	case 1:
 		return tx.Host
-	case 3:
+	case 2:
 		return pathOf(tx.URL)
-	case 4:
+	case 3:
 		return fmt.Sprintf("%d", tx.StatusCode)
-	case 5:
+	case 4:
 		return fmt.Sprintf("%db", len(tx.RespBody))
-	case 6:
+	case 5:
 		return fmt.Sprintf("%dms", tx.DurationMs)
 	}
 	return ""
@@ -185,8 +183,8 @@ func (h *historyTab) applyFilter() {
 	query := strings.ToLower(h.filterEntry.Text)
 	showOut := h.showOutScope.Checked
 
-	h.mu.Lock()
-	h.filtered = h.filtered[:0]
+	var filtered []store.Transaction
+	h.mu.RLock()
 	for _, tx := range h.rows {
 		if !showOut && !tx.InScope {
 			continue
@@ -196,8 +194,12 @@ func (h *historyTab) applyFilter() {
 				continue
 			}
 		}
-		h.filtered = append(h.filtered, tx)
+		filtered = append(filtered, tx)
 	}
+	h.mu.RUnlock()
+
+	h.mu.Lock()
+	h.filtered = filtered
 	h.mu.Unlock()
 
 	h.table.Refresh()
@@ -211,6 +213,9 @@ func (h *historyTab) watchUpdates() {
 		fyne.Do(func() {
 			h.mu.Lock()
 			h.rows = append([]store.Transaction{t}, h.rows...)
+			if len(h.rows) > 10000 {
+				h.rows = h.rows[:10000]
+			}
 			h.mu.Unlock()
 			h.applyFilter()
 		})
@@ -280,4 +285,3 @@ func newBoldLabel(text string) *widget.Label {
 	l.TextStyle = fyne.TextStyle{Bold: true}
 	return l
 }
-
