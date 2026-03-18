@@ -3,11 +3,17 @@ module github.com/shiv
 go 1.25
 
 require (
-	fyne.io/fyne/v2 v2.7.3 // indirect
+	fyne.io/fyne/v2 v2.7.3
+	github.com/alecthomas/chroma/v2 v2.23.1
+	github.com/andybalholm/brotli v1.2.0
+	modernc.org/sqlite v1.46.1
+)
+
+require (
 	fyne.io/systray v1.12.0 // indirect
 	github.com/BurntSushi/toml v1.5.0 // indirect
-	github.com/andybalholm/brotli v1.2.0 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
+	github.com/dlclark/regexp2 v1.11.5 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/fredbi/uri v1.1.1 // indirect
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
@@ -45,5 +51,4 @@ require (
 	modernc.org/libc v1.67.6 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
-	modernc.org/sqlite v1.46.1 // indirect
 )

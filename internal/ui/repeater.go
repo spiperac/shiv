@@ -90,7 +90,7 @@ func (r *repeaterTab) buildTabItem(t store.RepeaterTab) *container.TabItem {
 	reqEditor.Wrapping = fyne.TextWrapOff
 	reqEditor.SetText(t.RawRequest)
 
-	respLabel := widget.NewLabel("")
+	respLabel := widget.NewMultiLineEntry() //widget.NewLabel("")
 	respLabel.TextStyle = fyne.TextStyle{Monospace: true}
 	respLabel.Wrapping = fyne.TextWrapBreak
 
