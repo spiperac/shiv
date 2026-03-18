@@ -87,7 +87,7 @@ func (r *repeaterTab) buildTabItem(t store.RepeaterTab) *container.TabItem {
 	reqEditor := widget.NewMultiLineEntry()
 	reqEditor.SetPlaceHolder("Paste or edit raw HTTP request here...")
 	reqEditor.TextStyle = fyne.TextStyle{Monospace: true}
-	reqEditor.Wrapping = fyne.TextWrapOff
+	reqEditor.Wrapping = fyne.TextWrapBreak
 	reqEditor.SetText(t.RawRequest)
 
 	respLabel := widget.NewMultiLineEntry() //widget.NewLabel("")

@@ -1,31 +1,30 @@
 package ui
 
 import (
+	_ "embed"
 	"encoding/json"
-	"os"
-	"path/filepath"
-	"time"
-
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/storage"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
+	"github.com/shiv/assets"
+	"os"
+	"path/filepath"
+	"time"
 )
+
+var logoBytes []byte
 
 const maxRecentProjects = 10
 
-// RecentProject is a single entry in the recents list.
 type RecentProject struct {
 	Path     string    `json:"path"`
 	LastOpen time.Time `json:"last_open"`
 }
 
-// ShowLaunchScreen opens the launch window. When the user selects or creates
-// a project, onSelect is called with the chosen path on the main thread.
-// onSelect is called with an empty string if the window is closed without
-// selecting.
 func ShowLaunchScreen(app fyne.App, onSelect func(projectPath string, w fyne.Window)) {
 	w := app.NewWindow("Shiv")
 	w.Resize(fyne.NewSize(560, 420))
@@ -40,15 +39,14 @@ func ShowLaunchScreen(app fyne.App, onSelect func(projectPath string, w fyne.Win
 			return container.NewHBox(
 				widget.NewIcon(theme.DocumentIcon()),
 				container.NewVBox(
-					widget.NewLabel("path"),
+					widget.NewLabel("name"),
 					widget.NewLabel("date"),
 				),
 			)
 		},
 		func(i widget.ListItemID, obj fyne.CanvasObject) {
 			box := obj.(*fyne.Container).Objects[1].(*fyne.Container)
-			box.Objects[0].(*widget.Label).SetText(recents[i].Path)
-			box.Objects[0].(*widget.Label).Truncation = fyne.TextTruncateEllipsis
+			box.Objects[0].(*widget.Label).SetText(filepath.Base(recents[i].Path))
 			box.Objects[1].(*widget.Label).SetText(recents[i].LastOpen.Format("2006-01-02 15:04"))
 			box.Objects[1].(*widget.Label).Importance = widget.LowImportance
 		},
@@ -95,7 +93,10 @@ func ShowLaunchScreen(app fyne.App, onSelect func(projectPath string, w fyne.Win
 	})
 	newBtn.Importance = widget.HighImportance
 
-	title := widget.NewRichTextFromMarkdown("# Shiv")
+	logo := canvas.NewImageFromResource(fyne.NewStaticResource("logo.png", assets.Logo))
+	logo.FillMode = canvas.ImageFillContain
+	logo.SetMinSize(fyne.NewSize(64, 64))
+
 	subtitle := widget.NewLabel("HTTP/HTTPS Interception Proxy")
 	subtitle.Importance = widget.LowImportance
 
@@ -103,7 +104,7 @@ func ShowLaunchScreen(app fyne.App, onSelect func(projectPath string, w fyne.Win
 	recentLabel.TextStyle = fyne.TextStyle{Bold: true}
 
 	header := container.NewVBox(
-		container.NewCenter(title),
+		container.NewCenter(logo),
 		container.NewCenter(subtitle),
 		widget.NewSeparator(),
 	)
