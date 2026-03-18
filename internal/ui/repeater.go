@@ -40,7 +40,7 @@ func (r *repeaterTab) build() fyne.CanvasObject {
 		saved := store.RepeaterTab{
 			Name:       "New Tab",
 			Host:       "",
-			Port:       80,
+			Port:       443,
 			TLS:        false,
 			RawRequest: "",
 		}
@@ -124,8 +124,9 @@ func (r *repeaterTab) buildTabItem(t store.RepeaterTab) *container.TabItem {
 		}()
 	}
 
-	toolbar := container.NewHBox(
-		sendBtn,
+	toolbar := container.NewVBox(
+		widget.NewLabel(""), // adds vertical space
+		container.NewHBox(sendBtn),
 	)
 
 	reqPane := container.NewBorder(newBoldLabel("Request"), nil, nil, nil,
