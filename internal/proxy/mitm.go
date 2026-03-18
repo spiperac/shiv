@@ -33,7 +33,6 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	}
 	defer clientConn.Close()
 
-	// Strip port for cert lookup so cache works correctly.
 	bareHost, _, err := net.SplitHostPort(r.Host)
 	if err != nil {
 		bareHost = r.Host
@@ -50,12 +49,11 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		NextProtos:   []string{"http/1.1"},
 	})
 	if err := browserTLS.Handshake(); err != nil {
-		logger.Error("mitm: browser TLS handshake for %s: %v", bareHost, err)
+		logger.Debug("mitm: browser TLS handshake for %s: %v", bareHost, err)
 		return
 	}
 	defer browserTLS.Close()
 
-	// One transport per CONNECT tunnel — reused across all requests on this connection.
 	transport := &http.Transport{
 		DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			conn, err := (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, "tcp", addr)
@@ -129,6 +127,7 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		}
 		outReq.Header = interceptedReq.Header.Clone()
 		outReq.Host = bareHost
+		stripRequestCacheHeaders(outReq.Header)
 
 		resp, err := upstreamClient.Do(outReq)
 		if err != nil {
@@ -146,6 +145,7 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		elapsed := time.Since(start).Milliseconds()
 		logger.Info("%s %s %d %db %dms", interceptedReq.Method, interceptedReq.URL, resp.StatusCode, len(respBody), elapsed)
 
+		stripResponseCacheHeaders(resp.Header)
 		resp.Body = io.NopCloser(bytes.NewReader(respBody))
 		if err := resp.Write(browserTLS); err != nil {
 			logger.Debug("mitm: write response to browser for %s: %v", bareHost, err)

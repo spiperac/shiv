@@ -36,6 +36,33 @@ func (s *Store) Log(t Transaction) error {
 			return fmt.Errorf("store: marshal resp headers: %w", err)
 		}
 
+		// Check if identical request already exists.
+		var existingID uint64
+		err = s.db.QueryRow(`
+			SELECT id FROM history
+			WHERE method = ? AND host = ? AND url = ? AND status_code = ?
+			LIMIT 1`,
+			t.Method, t.Host, t.URL, t.StatusCode,
+		).Scan(&existingID)
+
+		if err == nil {
+			// Already exists — update timestamp only and push to UI to move it to top.
+			_, err = s.db.Exec(`
+				UPDATE history SET timestamp = ? WHERE id = ?`,
+				t.Timestamp.UTC().Format(time.RFC3339), existingID,
+			)
+			if err != nil {
+				return fmt.Errorf("store: update timestamp: %w", err)
+			}
+			t.ID = existingID
+			select {
+			case s.Updates <- t:
+			default:
+			}
+			return nil
+		}
+
+		// New request — insert.
 		res, err := s.db.Exec(`
 			INSERT INTO history
 				(timestamp, host, method, url, req_headers, req_body,
@@ -55,7 +82,6 @@ func (s *Store) Log(t Transaction) error {
 		id, _ := res.LastInsertId()
 		t.ID = uint64(id)
 
-		// Non-blocking push to UI.
 		select {
 		case s.Updates <- t:
 		default:
@@ -108,6 +134,17 @@ func scanTransactions(rows interface {
 		txs = append(txs, tx)
 	}
 	return txs, rows.Err()
+}
+
+// ClearHistory deletes all rows from the history table.
+func (s *Store) ClearHistory() error {
+	return s.write(func() error {
+		_, err := s.db.Exec(`DELETE FROM history`)
+		if err != nil {
+			return fmt.Errorf("store: clear history: %w", err)
+		}
+		return nil
+	})
 }
 
 func boolToInt(b bool) int {

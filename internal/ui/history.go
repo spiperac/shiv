@@ -2,21 +2,24 @@ package ui
 
 import (
 	"fmt"
-	"sort"
-	"strings"
-	"sync"
-
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
+	"net"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
 
+	"github.com/shiv/internal/logger"
 	"github.com/shiv/internal/store"
 )
 
 type historyTab struct {
-	st  *store.Store
-	win fyne.Window
+	st       *store.Store
+	win      fyne.Window
+	repeater *repeaterTab
 
 	mu       sync.RWMutex
 	rows     []store.Transaction
@@ -29,6 +32,7 @@ type historyTab struct {
 	respLabel    *widget.Label
 	sendRepeater *widget.Button
 	sendLoot     *widget.Button
+	clearBtn     *widget.Button
 
 	selectedTx  store.Transaction
 	hasSelected bool
@@ -37,8 +41,8 @@ type historyTab struct {
 var tableColumns = []string{"Method", "Host", "Path", "Status", "Size", "Duration"}
 var columnWidths = []float32{80, 200, 300, 70, 90, 90}
 
-func newHistoryTab(st *store.Store, win fyne.Window) fyne.CanvasObject {
-	h := &historyTab{st: st, win: win}
+func newHistoryTab(st *store.Store, win fyne.Window, repeater *repeaterTab) fyne.CanvasObject {
+	h := &historyTab{st: st, win: win, repeater: repeater}
 	return h.build()
 }
 
@@ -125,14 +129,48 @@ func (h *historyTab) build() fyne.CanvasObject {
 	detailSplit := container.NewHSplit(reqPane, respPane)
 	detailSplit.SetOffset(0.5)
 
-	h.sendRepeater = widget.NewButtonWithIcon("Send to Repeater", theme.MailForwardIcon(), func() {})
+	h.sendRepeater = widget.NewButtonWithIcon("Send to Repeater", theme.MailForwardIcon(), func() {
+		if !h.hasSelected {
+			return
+		}
+		tx := h.selectedTx
+		host, portStr, err := net.SplitHostPort(tx.Host)
+		if err != nil {
+			host = tx.Host
+			portStr = "443"
+			if !tx.TLS {
+				portStr = "80"
+			}
+		}
+		port, _ := strconv.Atoi(portStr)
+		name := fmt.Sprintf("%s %s", tx.Method, pathOf(tx.URL))
+		h.repeater.AddTab(name, host, port, tx.TLS, formatRequest(tx))
+	})
 	h.sendLoot = widget.NewButtonWithIcon("Send to Loot", theme.WarningIcon(), func() {})
 	h.sendRepeater.Disable()
 	h.sendLoot.Disable()
 
+	clearBtn := widget.NewButtonWithIcon("Clear History", theme.DeleteIcon(), func() {
+		if err := h.st.ClearHistory(); err != nil {
+			logger.Error("clear history: %v", err)
+			return
+		}
+		h.mu.Lock()
+		h.rows = nil
+		h.filtered = nil
+		h.mu.Unlock()
+		h.table.Refresh()
+		h.selectedTx = store.Transaction{}
+		h.hasSelected = false
+		h.reqLabel.SetText("")
+		h.respLabel.SetText("")
+		h.sendRepeater.Disable()
+		h.sendLoot.Disable()
+	})
+
 	detailPane := container.NewBorder(
 		nil,
-		container.NewHBox(h.sendRepeater, h.sendLoot),
+		container.NewHBox(h.sendRepeater, h.sendLoot, clearBtn),
 		nil, nil,
 		detailSplit,
 	)
@@ -212,7 +250,13 @@ func (h *historyTab) watchUpdates() {
 		t := tx
 		fyne.Do(func() {
 			h.mu.Lock()
-			h.rows = append([]store.Transaction{t}, h.rows...)
+			newRows := make([]store.Transaction, 0, len(h.rows))
+			for _, r := range h.rows {
+				if r.ID != t.ID {
+					newRows = append(newRows, r)
+				}
+			}
+			h.rows = append([]store.Transaction{t}, newRows...)
 			if len(h.rows) > 10000 {
 				h.rows = h.rows[:10000]
 			}

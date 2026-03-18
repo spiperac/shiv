@@ -31,11 +31,30 @@ func forward(req *http.Request) (*http.Response, error) {
 		}
 		out.Header[k] = vv
 	}
+	stripRequestCacheHeaders(out.Header)
 	resp, err := upstreamClient.Do(out)
 	if err != nil {
 		return nil, fmt.Errorf("forward: upstream request: %w", err)
 	}
+	stripResponseCacheHeaders(resp.Header)
 	return resp, nil
+}
+
+func stripRequestCacheHeaders(h http.Header) {
+	h.Del("If-None-Match")
+	h.Del("If-Modified-Since")
+	h.Del("If-Range")
+	h.Del("If-Match")
+	h.Del("If-Unmodified-Since")
+}
+
+func stripResponseCacheHeaders(h http.Header) {
+	h.Del("Cache-Control")
+	h.Del("Expires")
+	h.Del("ETag")
+	h.Del("Last-Modified")
+	h.Del("Pragma")
+	h.Set("Cache-Control", "no-store, no-cache, must-revalidate")
 }
 
 func decompressBody(header http.Header, body []byte) []byte {
@@ -76,7 +95,6 @@ func isBinary(header http.Header) bool {
 	if ce == "zstd" {
 		return true
 	}
-
 	ct := strings.ToLower(header.Get("Content-Type"))
 	if ct == "" {
 		return false
