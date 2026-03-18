@@ -1,16 +1,19 @@
 package ui
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
-	"fyne.io/fyne/v2"
-	"fyne.io/fyne/v2/container"
-	"fyne.io/fyne/v2/theme"
-	"fyne.io/fyne/v2/widget"
 	"net"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+
+	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/theme"
+	"fyne.io/fyne/v2/widget"
 
 	"github.com/shiv/internal/logger"
 	"github.com/shiv/internal/store"
@@ -28,8 +31,8 @@ type historyTab struct {
 	table        *widget.Table
 	filterEntry  *widget.Entry
 	showOutScope *widget.Check
-	reqLabel     *widget.Label
-	respLabel    *widget.Label
+	reqLabel     *readOnlyEntry
+	respLabel    *readOnlyEntry
 	sendRepeater *widget.Button
 	sendLoot     *widget.Button
 	clearBtn     *widget.Button
@@ -103,23 +106,29 @@ func (h *historyTab) build() fyne.CanvasObject {
 			h.mu.RUnlock()
 			return
 		}
-		tx := h.filtered[idx] // copy by value right now
+		tx := h.filtered[idx]
 		h.mu.RUnlock()
 
 		h.selectedTx = tx
 		h.hasSelected = true
-		h.showDetail(tx)
 		h.sendRepeater.Enable()
 		h.sendLoot.Enable()
+
+		go func() {
+			full, err := h.st.GetTransaction(tx.ID)
+			if err != nil {
+				logger.Error("history: get transaction: %v", err)
+				return
+			}
+			fyne.Do(func() {
+				h.selectedTx = *full
+				h.showDetail(*full)
+			})
+		}()
 	}
 
-	h.reqLabel = widget.NewLabel("")
-	h.reqLabel.TextStyle = fyne.TextStyle{Monospace: true}
-	h.reqLabel.Wrapping = fyne.TextWrapBreak
-
-	h.respLabel = widget.NewLabel("")
-	h.respLabel.TextStyle = fyne.TextStyle{Monospace: true}
-	h.respLabel.Wrapping = fyne.TextWrapBreak
+	h.reqLabel = newReadOnlyEntry()
+	h.respLabel = newReadOnlyEntry()
 
 	reqPane := container.NewBorder(newBoldLabel("Request"), nil, nil, nil,
 		container.NewScroll(h.reqLabel))
@@ -143,7 +152,11 @@ func (h *historyTab) build() fyne.CanvasObject {
 			}
 		}
 		port, _ := strconv.Atoi(portStr)
-		name := fmt.Sprintf("%s %s", tx.Method, pathOf(tx.URL))
+		path := pathOf(tx.URL)
+		if len(path) > 20 {
+			path = path[:20] + "..."
+		}
+		name := fmt.Sprintf("%s %s", tx.Method, path)
 		h.repeater.AddTab(name, host, port, tx.TLS, formatRequest(tx))
 	})
 	h.sendLoot = widget.NewButtonWithIcon("Send to Loot", theme.WarningIcon(), func() {})
@@ -182,12 +195,19 @@ func (h *historyTab) build() fyne.CanvasObject {
 	mainSplit.SetOffset(0.5)
 
 	// Load existing rows from DB on startup.
-	if txs, err := h.st.AllTransactions(); err == nil {
-		h.mu.Lock()
-		h.rows = txs
-		h.mu.Unlock()
-		h.applyFilter()
-	}
+	go func() {
+		txs, err := h.st.AllTransactions()
+		if err != nil {
+			logger.Error("history: load transactions: %v", err)
+			return
+		}
+		fyne.Do(func() {
+			h.mu.Lock()
+			h.rows = txs
+			h.mu.Unlock()
+			h.applyFilter()
+		})
+	}()
 
 	go h.watchUpdates()
 
@@ -212,7 +232,15 @@ func (h *historyTab) cellText(tx store.Transaction, col int) string {
 	return ""
 }
 
+const maxDisplayBytes = 64 * 1024 // 64 KB
+
 func (h *historyTab) showDetail(tx store.Transaction) {
+	if len(tx.RespBody) > maxDisplayBytes {
+		tx.RespBody = append(tx.RespBody[:maxDisplayBytes], []byte("\n... truncated")...)
+	}
+	if len(tx.ReqBody) > maxDisplayBytes {
+		tx.ReqBody = append(tx.ReqBody[:maxDisplayBytes], []byte("\n... truncated")...)
+	}
 	h.reqLabel.SetText(formatRequest(tx))
 	h.respLabel.SetText(formatResponse(tx))
 }
@@ -279,6 +307,17 @@ func pathOf(rawURL string) string {
 	return rawURL
 }
 
+func prettyJSON(body []byte) []byte {
+	if len(body) == 0 {
+		return body
+	}
+	var buf bytes.Buffer
+	if err := json.Indent(&buf, body, "", "  "); err != nil {
+		return body // not valid JSON, return as-is
+	}
+	return buf.Bytes()
+}
+
 func formatRequest(tx store.Transaction) string {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("%s %s HTTP/1.1\r\n", tx.Method, pathOf(tx.URL)))
@@ -295,7 +334,12 @@ func formatRequest(tx store.Transaction) string {
 	}
 	sb.WriteString("\r\n")
 	if len(tx.ReqBody) > 0 {
-		sb.WriteString(string(tx.ReqBody))
+		ct := tx.ReqHeaders.Get("Content-Type")
+		if strings.Contains(ct, "application/json") {
+			sb.Write(prettyJSON(tx.ReqBody))
+		} else {
+			sb.WriteString(string(tx.ReqBody))
+		}
 	}
 	return sb.String()
 }
@@ -315,7 +359,12 @@ func formatResponse(tx store.Transaction) string {
 	}
 	sb.WriteString("\r\n")
 	if len(tx.RespBody) > 0 {
-		sb.WriteString(string(tx.RespBody))
+		ct := tx.RespHeaders.Get("Content-Type")
+		if strings.Contains(ct, "application/json") {
+			sb.Write(prettyJSON(tx.RespBody))
+		} else {
+			sb.WriteString(string(tx.RespBody))
+		}
 	}
 	return sb.String()
 }

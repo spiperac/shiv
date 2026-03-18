@@ -4,10 +4,11 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
 
+	"github.com/shiv/internal/proxy"
 	"github.com/shiv/internal/store"
 )
 
-func ShowMainWindow(app fyne.App, st *store.Store, launchWin fyne.Window) {
+func ShowMainWindow(app fyne.App, st *store.Store, p *proxy.Proxy, ps store.ProxySettings, launchWin fyne.Window) {
 	w := app.NewWindow("Shiv")
 	w.Resize(fyne.NewSize(1280, 800))
 	w.SetMaster()
@@ -22,7 +23,7 @@ func ShowMainWindow(app fyne.App, st *store.Store, launchWin fyne.Window) {
 		container.NewTabItem("Intercept", interceptTab),
 		container.NewTabItem("Repeater", repeater.build()),
 		container.NewTabItem("Loot", placeholderTab("Loot — coming soon")),
-		container.NewTabItem("Settings", newSettingsTab(w)),
+		container.NewTabItem("Settings", newSettingsTab(w, st, p, ps)),
 	)
 	tabs.SetTabLocation(container.TabLocationTop)
 

@@ -112,17 +112,29 @@ func firefoxProfiles() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	profilesDir := filepath.Join(home, ".mozilla", "firefox")
-	entries, err := os.ReadDir(profilesDir)
-	if err != nil {
-		return nil, err
-	}
+
 	var profiles []string
-	for _, e := range entries {
-		if e.IsDir() {
-			profiles = append(profiles, filepath.Join(profilesDir, e.Name()))
+
+	profileDirs := []string{
+		filepath.Join(home, ".mozilla", "firefox"),
+		filepath.Join(home, ".librewolf"),
+		filepath.Join(home, "snap", "firefox", "common", ".mozilla", "firefox"),
+		filepath.Join(home, ".var", "app", "org.mozilla.firefox", ".mozilla", "firefox"),
+		filepath.Join(home, ".var", "app", "io.gitlab.librewolf-community", ".librewolf"),
+	}
+
+	for _, dir := range profileDirs {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if e.IsDir() {
+				profiles = append(profiles, filepath.Join(dir, e.Name()))
+			}
 		}
 	}
+
 	return profiles, nil
 }
 

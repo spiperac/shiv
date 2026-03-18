@@ -24,18 +24,29 @@ import (
 )
 
 type repeaterTab struct {
-	st   *store.Store
-	tabs *container.DocTabs
-	win  fyne.Window
+	st     *store.Store
+	tabs   *container.DocTabs
+	win    fyne.Window
+	tabIDs map[*container.TabItem]int64
 }
 
 func newRepeaterTab(st *store.Store, win fyne.Window) *repeaterTab {
-	return &repeaterTab{st: st, win: win}
+	return &repeaterTab{st: st, win: win, tabIDs: make(map[*container.TabItem]int64)}
 }
 
 func (r *repeaterTab) build() fyne.CanvasObject {
 	r.tabs = container.NewDocTabs()
 	r.tabs.SetTabLocation(container.TabLocationTop)
+
+	r.tabs.OnClosed = func(closed *container.TabItem) {
+		if id, ok := r.tabIDs[closed]; ok {
+			if err := r.st.DeleteRepeaterTab(id); err != nil {
+				logger.Error("repeater: delete tab: %v", err)
+			}
+			delete(r.tabIDs, closed)
+		}
+	}
+
 	r.tabs.CreateTab = func() *container.TabItem {
 		saved := store.RepeaterTab{
 			Name:       "New Tab",
@@ -90,9 +101,7 @@ func (r *repeaterTab) buildTabItem(t store.RepeaterTab) *container.TabItem {
 	reqEditor.Wrapping = fyne.TextWrapBreak
 	reqEditor.SetText(t.RawRequest)
 
-	respLabel := widget.NewMultiLineEntry() //widget.NewLabel("")
-	respLabel.TextStyle = fyne.TextStyle{Monospace: true}
-	respLabel.Wrapping = fyne.TextWrapBreak
+	respLabel := newReadOnlyEntry()
 
 	sendBtn := widget.NewButtonWithIcon("Send", theme.MailSendIcon(), nil)
 	sendBtn.Importance = widget.HighImportance
@@ -101,8 +110,6 @@ func (r *repeaterTab) buildTabItem(t store.RepeaterTab) *container.TabItem {
 	tabHost := t.Host
 	tabPort := t.Port
 	tabTLS := t.TLS
-
-	var tabItem *container.TabItem
 
 	sendBtn.OnTapped = func() {
 		rawReq := reqEditor.Text
@@ -125,7 +132,7 @@ func (r *repeaterTab) buildTabItem(t store.RepeaterTab) *container.TabItem {
 	}
 
 	toolbar := container.NewVBox(
-		widget.NewLabel(""), // adds vertical space
+		widget.NewLabel(""),
 		container.NewHBox(sendBtn),
 	)
 
@@ -139,15 +146,8 @@ func (r *repeaterTab) buildTabItem(t store.RepeaterTab) *container.TabItem {
 
 	content := container.NewBorder(toolbar, nil, nil, nil, split)
 
-	tabItem = container.NewTabItem(t.Name, content)
-
-	r.tabs.OnClosed = func(closed *container.TabItem) {
-		if closed == tabItem {
-			if err := r.st.DeleteRepeaterTab(tabID); err != nil {
-				logger.Error("repeater: delete tab: %v", err)
-			}
-		}
-	}
+	tabItem := container.NewTabItem(t.Name, content)
+	r.tabIDs[tabItem] = tabID
 
 	return tabItem
 }
@@ -179,11 +179,9 @@ func sendRawRequest(host string, port int, useTLS bool, rawReq string) (string, 
 	defer conn.Close()
 	conn.SetDeadline(time.Now().Add(30 * time.Second))
 
-	// Normalize line endings.
 	rawReq = strings.ReplaceAll(rawReq, "\r\n", "\n")
 	rawReq = strings.ReplaceAll(rawReq, "\n", "\r\n")
 
-	// Strip port from Host header and remove Accept-Encoding so server returns plain text.
 	var lines []string
 	for _, line := range strings.Split(rawReq, "\r\n") {
 		lower := strings.ToLower(line)
@@ -213,9 +211,11 @@ func sendRawRequest(host string, port int, useTLS bool, rawReq string) (string, 
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20)) // 1 MB cap
 	body = decompressRepeaterBody(resp.Header, body)
-
+	if len(body) > 64*1024 {
+		body = append(body[:64*1024], []byte("\n... truncated")...)
+	}
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("HTTP/1.1 %d %s\r\n", resp.StatusCode, http.StatusText(resp.StatusCode)))
 	for k, vv := range resp.Header {
@@ -227,6 +227,7 @@ func sendRawRequest(host string, port int, useTLS bool, rawReq string) (string, 
 	sb.Write(body)
 	return sb.String(), nil
 }
+
 func decompressRepeaterBody(header http.Header, body []byte) []byte {
 	ce := strings.ToLower(header.Get("Content-Encoding"))
 	r := bytes.NewReader(body)

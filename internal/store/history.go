@@ -24,8 +24,62 @@ type Transaction struct {
 	InScope     bool
 }
 
+func (s *Store) GetTransaction(id uint64) (*Transaction, error) {
+	var tx Transaction
+	var ts, reqH, respH string
+	var tlsInt, scopeInt int
+	err := s.db.QueryRow(`
+		SELECT id, timestamp, host, method, url,
+		       req_headers, req_body, status_code, resp_headers,
+		       resp_body, duration_ms, tls, in_scope
+		FROM history WHERE id = ?`, id,
+	).Scan(
+		&tx.ID, &ts, &tx.Host, &tx.Method, &tx.URL,
+		&reqH, &tx.ReqBody, &tx.StatusCode, &respH,
+		&tx.RespBody, &tx.DurationMs, &tlsInt, &scopeInt,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("store: get transaction %d: %w", id, err)
+	}
+	tx.Timestamp, _ = time.Parse(time.RFC3339, ts)
+	tx.TLS = tlsInt == 1
+	tx.InScope = scopeInt == 1
+	if err := json.Unmarshal([]byte(reqH), &tx.ReqHeaders); err != nil {
+		tx.ReqHeaders = http.Header{}
+	}
+	if err := json.Unmarshal([]byte(respH), &tx.RespHeaders); err != nil {
+		tx.RespHeaders = http.Header{}
+	}
+	return &tx, nil
+}
+
 // Log writes a completed transaction to the history table and pushes it to Updates.
 func (s *Store) Log(t Transaction) error {
+	// Dedup check outside write lock.
+	var existingID uint64
+	err := s.db.QueryRow(`
+		SELECT id FROM history
+		WHERE method = ? AND host = ? AND url = ? AND status_code = ?
+		LIMIT 1`,
+		t.Method, t.Host, t.URL, t.StatusCode,
+	).Scan(&existingID)
+
+	if err == nil {
+		return s.write(func() error {
+			_, err = s.db.Exec(`UPDATE history SET timestamp = ? WHERE id = ?`,
+				t.Timestamp.UTC().Format(time.RFC3339), existingID)
+			if err != nil {
+				return fmt.Errorf("store: update timestamp: %w", err)
+			}
+			t.ID = existingID
+			select {
+			case s.Updates <- t:
+			default:
+			}
+			return nil
+		})
+	}
+
 	return s.write(func() error {
 		reqH, err := json.Marshal(t.ReqHeaders)
 		if err != nil {
@@ -36,33 +90,6 @@ func (s *Store) Log(t Transaction) error {
 			return fmt.Errorf("store: marshal resp headers: %w", err)
 		}
 
-		// Check if identical request already exists.
-		var existingID uint64
-		err = s.db.QueryRow(`
-			SELECT id FROM history
-			WHERE method = ? AND host = ? AND url = ? AND status_code = ?
-			LIMIT 1`,
-			t.Method, t.Host, t.URL, t.StatusCode,
-		).Scan(&existingID)
-
-		if err == nil {
-			// Already exists — update timestamp only and push to UI to move it to top.
-			_, err = s.db.Exec(`
-				UPDATE history SET timestamp = ? WHERE id = ?`,
-				t.Timestamp.UTC().Format(time.RFC3339), existingID,
-			)
-			if err != nil {
-				return fmt.Errorf("store: update timestamp: %w", err)
-			}
-			t.ID = existingID
-			select {
-			case s.Updates <- t:
-			default:
-			}
-			return nil
-		}
-
-		// New request — insert.
 		res, err := s.db.Exec(`
 			INSERT INTO history
 				(timestamp, host, method, url, req_headers, req_body,
@@ -94,10 +121,10 @@ func (s *Store) Log(t Transaction) error {
 func (s *Store) AllTransactions() ([]Transaction, error) {
 	rows, err := s.db.Query(`
 		SELECT id, timestamp, host, method, url,
-		       req_headers, req_body, status_code, resp_headers,
-		       resp_body, duration_ms, tls, in_scope
+		       req_headers, '' as req_body, status_code, resp_headers,
+		       '' as resp_body, duration_ms, tls, in_scope
 		FROM history
-		ORDER BY id DESC`)
+		ORDER BY id DESC LIMIT 100`)
 	if err != nil {
 		return nil, fmt.Errorf("store: query history: %w", err)
 	}

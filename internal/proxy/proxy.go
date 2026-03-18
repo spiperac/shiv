@@ -2,9 +2,11 @@ package proxy
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/shiv/internal/cert"
@@ -12,13 +14,16 @@ import (
 	"github.com/shiv/internal/store"
 )
 
-const maxBodySize = 10 << 20 // 10 MB
-
 type Proxy struct {
 	addr  string
 	ca    *cert.CA
 	store *store.Store
+
+	mu  sync.Mutex
+	srv *http.Server
 }
+
+const maxBodySize = 10 << 20 // 10 MB
 
 func New(addr string, st *store.Store) (*Proxy, error) {
 	ca, err := cert.Load()
@@ -33,8 +38,54 @@ func (p *Proxy) CA() *cert.CA {
 }
 
 func (p *Proxy) Start() error {
+	p.mu.Lock()
+	srv := &http.Server{
+		Addr:         p.addr,
+		Handler:      p,
+		ReadTimeout:  60 * time.Second,
+		WriteTimeout: 60 * time.Second,
+		IdleTimeout:  120 * time.Second,
+	}
+	p.srv = srv
+	p.mu.Unlock()
+
 	logger.Always("proxy listening on %s", p.addr)
-	return http.ListenAndServe(p.addr, p)
+	return srv.ListenAndServe()
+}
+
+func (p *Proxy) Restart(newAddr string) error {
+	p.mu.Lock()
+	srv := p.srv
+	p.mu.Unlock()
+
+	if srv != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		srv.Shutdown(ctx)
+	}
+
+	p.mu.Lock()
+	p.addr = newAddr
+	p.mu.Unlock()
+
+	go func() {
+		if err := p.Start(); err != nil && err != http.ErrServerClosed {
+			logger.Error("proxy: restart: %v", err)
+		}
+	}()
+	return nil
+}
+
+func (p *Proxy) Stop() {
+	p.mu.Lock()
+	srv := p.srv
+	p.mu.Unlock()
+
+	if srv != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		srv.Shutdown(ctx)
+	}
 }
 
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -77,6 +128,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	elapsed := time.Since(start).Milliseconds()
 
+	stripResponseCacheHeaders(resp.Header)
 	for k, vv := range resp.Header {
 		for _, v := range vv {
 			w.Header().Add(k, v)
