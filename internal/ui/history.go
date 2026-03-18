@@ -36,6 +36,7 @@ type historyTab struct {
 	sendRepeater *widget.Button
 	sendLoot     *widget.Button
 	clearBtn     *widget.Button
+	scopeBtn     *widget.Button
 
 	selectedTx  store.Transaction
 	hasSelected bool
@@ -57,7 +58,14 @@ func (h *historyTab) build() fyne.CanvasObject {
 	h.showOutScope = widget.NewCheck("Show out-of-scope", func(_ bool) { h.applyFilter() })
 	h.showOutScope.Checked = true
 
-	filterBar := container.NewBorder(nil, nil, nil, h.showOutScope, h.filterEntry)
+	h.scopeBtn = widget.NewButtonWithIcon("Scope", theme.SearchReplaceIcon(), func() {
+		showScopeDialog(h.st, h.win)
+	})
+
+	filterBar := container.NewBorder(nil, nil, nil,
+		container.NewHBox(h.showOutScope, h.scopeBtn),
+		h.filterEntry,
+	)
 
 	h.table = widget.NewTable(
 		func() (int, int) {
@@ -132,7 +140,16 @@ func (h *historyTab) build() fyne.CanvasObject {
 
 	reqPane := container.NewBorder(newBoldLabel("Request"), nil, nil, nil,
 		container.NewScroll(h.reqLabel))
-	respPane := container.NewBorder(newBoldLabel("Response"), nil, nil, nil,
+	inspectBtn := widget.NewButtonWithIcon("Inspector", theme.InfoIcon(), func() {
+		if !h.hasSelected {
+			return
+		}
+		showInspectorDialog(h.selectedTx, h.win)
+	})
+
+	respPane := container.NewBorder(
+		container.NewBorder(nil, nil, nil, inspectBtn, newBoldLabel("Response")),
+		nil, nil, nil,
 		container.NewScroll(h.respLabel))
 
 	detailSplit := container.NewHSplit(reqPane, respPane)

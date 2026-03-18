@@ -169,7 +169,7 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 			RespBody:    logBody,
 			DurationMs:  elapsed,
 			TLS:         true,
-			InScope:     true,
+			InScope:     p.store.InScope(r.Host),
 		}); err != nil {
 			logger.Error("mitm: store transaction for %s: %v", bareHost, err)
 		}

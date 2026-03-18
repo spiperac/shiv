@@ -10,6 +10,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -105,17 +106,27 @@ func (r *repeaterTab) buildTabItem(t store.RepeaterTab) *container.TabItem {
 
 	sendBtn := widget.NewButtonWithIcon("Send", theme.MailSendIcon(), nil)
 	sendBtn.Importance = widget.HighImportance
+	var lastTx store.Transaction
+
+	inspectBtn := widget.NewButtonWithIcon("Inspector", theme.InfoIcon(), func() {
+		showInspectorDialog(lastTx, r.win)
+	})
+	inspectBtn.Disable()
 
 	tabID := t.ID
-	tabHost := t.Host
-	tabPort := t.Port
-	tabTLS := t.TLS
-
 	sendBtn.OnTapped = func() {
 		rawReq := reqEditor.Text
+
+		// parse host and port from request Host header
+		host, port, useTLS := parseHostFromRaw(rawReq)
+		if host == "" {
+			respLabel.SetText("Error: no Host header found in request")
+			return
+		}
+
 		sendBtn.Disable()
 		go func() {
-			resp, err := sendRawRequest(tabHost, tabPort, tabTLS, rawReq)
+			resp, err := sendRawRequest(host, port, useTLS, rawReq)
 			fyne.Do(func() {
 				sendBtn.Enable()
 				if err != nil {
@@ -123,6 +134,11 @@ func (r *repeaterTab) buildTabItem(t store.RepeaterTab) *container.TabItem {
 					logger.Error("repeater: send: %v", err)
 				} else {
 					respLabel.SetText(resp)
+					lastTx = store.Transaction{
+						RespHeaders: parseRawHeaders(resp),
+						RespBody:    []byte(resp),
+					}
+					inspectBtn.Enable()
 				}
 				if saveErr := r.st.UpdateRepeaterTab(tabID, rawReq, respLabel.Text); saveErr != nil {
 					logger.Error("repeater: update tab: %v", saveErr)
@@ -131,14 +147,21 @@ func (r *repeaterTab) buildTabItem(t store.RepeaterTab) *container.TabItem {
 		}()
 	}
 
+	cloneBtn := widget.NewButtonWithIcon("Clone", theme.ContentCopyIcon(), func() {
+		r.AddTab(t.Name, t.Host, t.Port, t.TLS, reqEditor.Text)
+	})
+
 	toolbar := container.NewVBox(
 		widget.NewLabel(""),
-		container.NewHBox(sendBtn),
+		container.NewHBox(sendBtn, cloneBtn),
 	)
 
 	reqPane := container.NewBorder(newBoldLabel("Request"), nil, nil, nil,
 		container.NewScroll(reqEditor))
-	respPane := container.NewBorder(newBoldLabel("Response"), nil, nil, nil,
+
+	respPane := container.NewBorder(
+		container.NewBorder(nil, nil, nil, inspectBtn, newBoldLabel("Response")),
+		nil, nil, nil,
 		container.NewScroll(respLabel))
 
 	split := container.NewHSplit(reqPane, respPane)
@@ -257,4 +280,39 @@ func decompressRepeaterBody(header http.Header, body []byte) []byte {
 		return out
 	}
 	return body
+}
+
+func parseRawHeaders(raw string) http.Header {
+	headers := http.Header{}
+	lines := strings.Split(raw, "\r\n")
+	for _, line := range lines[1:] {
+		if line == "" {
+			break
+		}
+		parts := strings.SplitN(line, ": ", 2)
+		if len(parts) == 2 {
+			headers.Add(parts[0], parts[1])
+		}
+	}
+	return headers
+}
+
+func parseHostFromRaw(raw string) (host string, port int, useTLS bool) {
+	for _, line := range strings.Split(raw, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(strings.ToLower(line), "host:") {
+			hostVal := strings.TrimSpace(line[5:])
+			if h, p, err := net.SplitHostPort(hostVal); err == nil {
+				host = h
+				port, _ = strconv.Atoi(p)
+				useTLS = port == 443
+			} else {
+				host = hostVal
+				port = 443
+				useTLS = true
+			}
+			return
+		}
+	}
+	return "", 0, false
 }

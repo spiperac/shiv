@@ -158,7 +158,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		RespBody:    logBody,
 		DurationMs:  elapsed,
 		TLS:         false,
-		InScope:     true,
+		InScope:     p.store.InScope(interceptedReq.Host),
 	}); err != nil {
 		logger.Error("store transaction: %v", err)
 	}
