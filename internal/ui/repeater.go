@@ -16,6 +16,7 @@ import (
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
@@ -25,19 +26,61 @@ import (
 )
 
 type repeaterTab struct {
-	st     *store.Store
-	tabs   *container.DocTabs
-	win    fyne.Window
-	tabIDs map[*container.TabItem]int64
+	st      *store.Store
+	tabs    *container.DocTabs
+	win     fyne.Window
+	tabIDs  map[*container.TabItem]int64
+	sendFns map[*container.TabItem]func()
 }
 
 func newRepeaterTab(st *store.Store, win fyne.Window) *repeaterTab {
-	return &repeaterTab{st: st, win: win, tabIDs: make(map[*container.TabItem]int64)}
+	return &repeaterTab{
+		st:      st,
+		win:     win,
+		tabIDs:  make(map[*container.TabItem]int64),
+		sendFns: make(map[*container.TabItem]func()),
+	}
+}
+
+type repeaterEntry struct {
+	widget.Entry
+	onCtrlS func()
+}
+
+func newRepeaterEntry() *repeaterEntry {
+	e := &repeaterEntry{}
+	e.ExtendBaseWidget(e)
+	e.MultiLine = true
+	e.TextStyle = fyne.TextStyle{Monospace: true}
+	e.Wrapping = fyne.TextWrapBreak
+	return e
+}
+
+func (e *repeaterEntry) TypedShortcut(s fyne.Shortcut) {
+	if cs, ok := s.(*desktop.CustomShortcut); ok {
+		if cs.KeyName == fyne.KeyS && cs.Modifier == fyne.KeyModifierControl {
+			if e.onCtrlS != nil {
+				e.onCtrlS()
+			}
+			return
+		}
+	}
+	e.Entry.TypedShortcut(s)
 }
 
 func (r *repeaterTab) build() fyne.CanvasObject {
 	r.tabs = container.NewDocTabs()
 	r.tabs.SetTabLocation(container.TabLocationTop)
+
+	r.win.Canvas().AddShortcut(&desktop.CustomShortcut{KeyName: fyne.KeyS, Modifier: fyne.KeyModifierControl}, func(_ fyne.Shortcut) {
+		selected := r.tabs.Selected()
+		if selected == nil {
+			return
+		}
+		if fn, ok := r.sendFns[selected]; ok {
+			fn()
+		}
+	})
 
 	r.tabs.OnClosed = func(closed *container.TabItem) {
 		if id, ok := r.tabIDs[closed]; ok {
@@ -46,6 +89,7 @@ func (r *repeaterTab) build() fyne.CanvasObject {
 			}
 			delete(r.tabIDs, closed)
 		}
+		delete(r.sendFns, closed)
 	}
 
 	r.tabs.CreateTab = func() *container.TabItem {
@@ -96,16 +140,15 @@ func (r *repeaterTab) AddTab(name, host string, port int, useTLS bool, rawReques
 }
 
 func (r *repeaterTab) buildTabItem(t store.RepeaterTab) *container.TabItem {
-	reqEditor := widget.NewMultiLineEntry()
+	reqEditor := newRepeaterEntry()
 	reqEditor.SetPlaceHolder("Paste or edit raw HTTP request here...")
-	reqEditor.TextStyle = fyne.TextStyle{Monospace: true}
-	reqEditor.Wrapping = fyne.TextWrapBreak
 	reqEditor.SetText(t.RawRequest)
 
 	respLabel := newReadOnlyEntry()
 
 	sendBtn := widget.NewButtonWithIcon("Send", theme.MailSendIcon(), nil)
 	sendBtn.Importance = widget.HighImportance
+
 	var lastTx store.Transaction
 
 	inspectBtn := widget.NewButtonWithIcon("Inspector", theme.InfoIcon(), func() {
@@ -114,16 +157,17 @@ func (r *repeaterTab) buildTabItem(t store.RepeaterTab) *container.TabItem {
 	inspectBtn.Disable()
 
 	tabID := t.ID
-	sendBtn.OnTapped = func() {
-		rawReq := reqEditor.Text
 
-		// parse host and port from request Host header
+	doSend := func() {
+		if sendBtn.Disabled() {
+			return
+		}
+		rawReq := reqEditor.Text
 		host, port, useTLS := parseHostFromRaw(rawReq)
 		if host == "" {
 			respLabel.SetText("Error: no Host header found in request")
 			return
 		}
-
 		sendBtn.Disable()
 		go func() {
 			resp, err := sendRawRequest(host, port, useTLS, rawReq)
@@ -146,6 +190,9 @@ func (r *repeaterTab) buildTabItem(t store.RepeaterTab) *container.TabItem {
 			})
 		}()
 	}
+
+	sendBtn.OnTapped = doSend
+	reqEditor.onCtrlS = doSend
 
 	cloneBtn := widget.NewButtonWithIcon("Clone", theme.ContentCopyIcon(), func() {
 		r.AddTab(t.Name, t.Host, t.Port, t.TLS, reqEditor.Text)
@@ -170,7 +217,8 @@ func (r *repeaterTab) buildTabItem(t store.RepeaterTab) *container.TabItem {
 	content := container.NewBorder(toolbar, nil, nil, nil, split)
 
 	tabItem := container.NewTabItem(t.Name, content)
-	r.tabIDs[tabItem] = tabID
+
+	r.sendFns[tabItem] = doSend
 
 	return tabItem
 }
@@ -205,8 +253,17 @@ func sendRawRequest(host string, port int, useTLS bool, rawReq string) (string, 
 	rawReq = strings.ReplaceAll(rawReq, "\r\n", "\n")
 	rawReq = strings.ReplaceAll(rawReq, "\n", "\r\n")
 
-	var lines []string
-	for _, line := range strings.Split(rawReq, "\r\n") {
+	parts := strings.SplitN(rawReq, "\r\n\r\n", 2)
+	headerSection := parts[0]
+	body := ""
+	if len(parts) == 2 {
+		body = parts[1]
+		body = strings.TrimRight(body, "\r\n")
+	}
+
+	headerLines := strings.Split(headerSection, "\r\n")
+	var newLines []string
+	for _, line := range headerLines {
 		lower := strings.ToLower(line)
 		if strings.HasPrefix(lower, "host:") {
 			hostVal := strings.TrimSpace(line[5:])
@@ -217,14 +274,20 @@ func sendRawRequest(host string, port int, useTLS bool, rawReq string) (string, 
 		if strings.HasPrefix(lower, "accept-encoding:") {
 			continue
 		}
-		lines = append(lines, line)
-	}
-	rawReq = strings.Join(lines, "\r\n")
-	if !strings.HasSuffix(rawReq, "\r\n\r\n") {
-		rawReq += "\r\n"
+		if strings.HasPrefix(lower, "content-length:") {
+			continue
+		}
+		newLines = append(newLines, line)
 	}
 
-	if _, err := fmt.Fprint(conn, rawReq); err != nil {
+	if len(body) > 0 {
+		newLines = append(newLines, fmt.Sprintf("Content-Length: %d", len(body)))
+	}
+
+	finalReq := strings.Join(newLines, "\r\n") + "\r\n\r\n" + body
+
+	logger.Debug("repeater: sending request:\n%s", finalReq)
+	if _, err := fmt.Fprint(conn, finalReq); err != nil {
 		return "", fmt.Errorf("write request: %w", err)
 	}
 
@@ -234,11 +297,12 @@ func sendRawRequest(host string, port int, useTLS bool, rawReq string) (string, 
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20)) // 1 MB cap
-	body = decompressRepeaterBody(resp.Header, body)
-	if len(body) > 64*1024 {
-		body = append(body[:64*1024], []byte("\n... truncated")...)
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	respBody = decompressRepeaterBody(resp.Header, respBody)
+	if len(respBody) > 64*1024 {
+		respBody = append(respBody[:64*1024], []byte("\n... truncated")...)
 	}
+
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("HTTP/1.1 %d %s\r\n", resp.StatusCode, http.StatusText(resp.StatusCode)))
 	for k, vv := range resp.Header {
@@ -247,7 +311,7 @@ func sendRawRequest(host string, port int, useTLS bool, rawReq string) (string, 
 		}
 	}
 	sb.WriteString("\r\n")
-	sb.Write(body)
+	sb.Write(respBody)
 	return sb.String(), nil
 }
 

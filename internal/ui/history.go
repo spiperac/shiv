@@ -12,6 +12,7 @@ import (
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
@@ -175,6 +176,11 @@ func (h *historyTab) build() fyne.CanvasObject {
 		}
 		name := fmt.Sprintf("%s %s", tx.Method, path)
 		h.repeater.AddTab(name, host, port, tx.TLS, formatRequest(tx))
+	})
+	h.win.Canvas().AddShortcut(&desktop.CustomShortcut{KeyName: fyne.KeyR, Modifier: fyne.KeyModifierControl}, func(_ fyne.Shortcut) {
+		if h.hasSelected {
+			h.sendRepeater.OnTapped()
+		}
 	})
 
 	h.sendLoot = widget.NewButtonWithIcon("Send to Loot", theme.WarningIcon(), func() {
