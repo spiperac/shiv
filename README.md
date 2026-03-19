@@ -1,5 +1,4 @@
-# <img src="assets/logo.png" width="48"/> Shiv
-
+# <img src="assets/logo.png" width="48" align="center" style="vertical-align:middle"/> Shiv
 A desktop HTTP/HTTPS interception proxy for web security testing.
 
 ## Features
