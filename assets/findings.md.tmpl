@@ -1,0 +1,29 @@
+# Shiv Loot
+
+Generated: {{.Generated}}
+
+---
+{{range .Entries}}
+## [{{.Severity}}] {{.Title}}
+
+**Date:** {{.Date}}
+{{if .Notes}}
+### Notes
+
+{{.Notes}}
+{{end}}
+{{if .Request}}
+### Request
+
+```http
+{{.Request}}
+```
+
+### Response
+
+```http
+{{.Response}}
+```
+{{end}}
+---
+{{end}}

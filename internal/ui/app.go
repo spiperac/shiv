@@ -14,15 +14,17 @@ func ShowMainWindow(app fyne.App, st *store.Store, p *proxy.Proxy, ps store.Prox
 	w.SetMaster()
 
 	repeater := newRepeaterTab(st, w)
-
-	historyTab := newHistoryTab(st, w, repeater)
+	loot := &lootTab{st: st, win: w, repeater: repeater, selectedIdx: -1}
+	historyTab := newHistoryTab(st, w, repeater, loot)
 	interceptTab := newInterceptTab(st)
 
+	lootContent := loot.build()
 	tabs := container.NewAppTabs(
 		container.NewTabItem("History", historyTab),
 		container.NewTabItem("Intercept", interceptTab),
 		container.NewTabItem("Repeater", repeater.build()),
-		container.NewTabItem("Loot", placeholderTab("Loot — coming soon")),
+
+		container.NewTabItem("Loot", lootContent),
 		container.NewTabItem("Settings", newSettingsTab(w, st, p, ps)),
 	)
 	tabs.SetTabLocation(container.TabLocationTop)

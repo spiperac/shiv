@@ -23,6 +23,7 @@ type historyTab struct {
 	st       *store.Store
 	win      fyne.Window
 	repeater *repeaterTab
+	loot     *lootTab
 
 	mu       sync.RWMutex
 	rows     []store.Transaction
@@ -45,11 +46,10 @@ type historyTab struct {
 var tableColumns = []string{"Method", "Host", "Path", "Status", "Size", "Duration"}
 var columnWidths = []float32{80, 200, 300, 70, 90, 90}
 
-func newHistoryTab(st *store.Store, win fyne.Window, repeater *repeaterTab) fyne.CanvasObject {
-	h := &historyTab{st: st, win: win, repeater: repeater}
+func newHistoryTab(st *store.Store, win fyne.Window, repeater *repeaterTab, loot *lootTab) fyne.CanvasObject {
+	h := &historyTab{st: st, win: win, repeater: repeater, loot: loot}
 	return h.build()
 }
-
 func (h *historyTab) build() fyne.CanvasObject {
 	h.filterEntry = widget.NewEntry()
 	h.filterEntry.SetPlaceHolder("Filter — host, path, method...")
@@ -176,7 +176,14 @@ func (h *historyTab) build() fyne.CanvasObject {
 		name := fmt.Sprintf("%s %s", tx.Method, path)
 		h.repeater.AddTab(name, host, port, tx.TLS, formatRequest(tx))
 	})
-	h.sendLoot = widget.NewButtonWithIcon("Send to Loot", theme.WarningIcon(), func() {})
+
+	h.sendLoot = widget.NewButtonWithIcon("Send to Loot", theme.WarningIcon(), func() {
+		if !h.hasSelected {
+			return
+		}
+		id := h.selectedTx.ID
+		h.loot.showAddDialog(&id)
+	})
 	h.sendRepeater.Disable()
 	h.sendLoot.Disable()
 
