@@ -1,4 +1,4 @@
-# ![Shiv](assets/logo.png) Shiv
+# <img src="assets/logo.png" width="48"/> Shiv
 
 A desktop HTTP/HTTPS interception proxy for web security testing.
 
