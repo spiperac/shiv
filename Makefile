@@ -24,3 +24,6 @@ install: build
 	@echo "Categories=Development;Network;Security;" >> $(HOME)/.local/share/applications/shiv.desktop
 	@echo "Terminal=false" >> $(HOME)/.local/share/applications/shiv.desktop
 	@update-desktop-database $(HOME)/.local/share/applications 2>/dev/null || true
+
+package:
+	fyne package
