@@ -5,6 +5,7 @@ import (
 	"crypto/x509"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -114,13 +115,7 @@ func TestHostCertProperties(t *testing.T) {
 				t.Errorf("CN = %q, want %q", leaf.Subject.CommonName, h)
 			}
 
-			found := false
-			for _, dns := range leaf.DNSNames {
-				if dns == h {
-					found = true
-					break
-				}
-			}
+			found := slices.Contains(leaf.DNSNames, h)
 			if !found {
 				t.Errorf("hostname %q not in DNSNames %v", h, leaf.DNSNames)
 			}
@@ -279,18 +274,16 @@ func TestHostCertCacheConcurrent(t *testing.T) {
 	results := make([]*tls.Certificate, goroutines)
 	var wg sync.WaitGroup
 
-	for i := 0; i < goroutines; i++ {
+	for i := range goroutines {
 		i := i
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			c, err := ca.TLSCertForHost("concurrent.example.com")
 			if err != nil {
 				t.Errorf("goroutine %d: %v", i, err)
 				return
 			}
 			results[i] = c
-		}()
+		})
 	}
 	wg.Wait()
 
