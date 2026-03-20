@@ -84,6 +84,7 @@ func (r *repeaterTab) build() fyne.CanvasObject {
 
 	r.tabs.OnClosed = func(closed *container.TabItem) {
 		if id, ok := r.tabIDs[closed]; ok {
+			logger.Info("repeater: OnClosed called, found=%v id=%d", ok, id)
 			if err := r.st.DeleteRepeaterTab(id); err != nil {
 				logger.Error("repeater: delete tab: %v", err)
 			}
@@ -219,6 +220,7 @@ func (r *repeaterTab) buildTabItem(t store.RepeaterTab) *container.TabItem {
 	tabItem := container.NewTabItem(t.Name, content)
 
 	r.sendFns[tabItem] = doSend
+	r.tabIDs[tabItem] = tabID
 
 	return tabItem
 }
