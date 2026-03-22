@@ -24,6 +24,7 @@ func main() {
 
 	a := app.NewWithID("io.shiv.proxy")
 	a.SetIcon(fyne.NewStaticResource("logo.png", assets.Logo))
+	a.Settings().SetTheme(ui.NewVagueTheme(true))
 
 	ui.ShowLaunchScreen(a, func(projectPath string, launchWin fyne.Window) {
 		if projectPath == "" {

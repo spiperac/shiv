@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"net"
 	"strings"
 
 	"fyne.io/fyne/v2"
@@ -55,7 +56,7 @@ func showScopeDialog(st *store.Store, win fyne.Window) {
 	hostEntry := widget.NewEntry()
 	hostEntry.SetPlaceHolder("example.com")
 
-	addBtn := widget.NewButtonWithIcon("Add", theme.ContentAddIcon(), func() {
+	addBtn := widget.NewButtonWithIcon("Add", AppIcon("save"), func() {
 		host := strings.TrimSpace(hostEntry.Text)
 		if host == "" {
 			return
@@ -67,9 +68,9 @@ func showScopeDialog(st *store.Store, win fyne.Window) {
 		if idx := strings.Index(host, "/"); idx >= 0 {
 			host = host[:idx]
 		}
-		// strip port
-		if idx := strings.LastIndex(host, ":"); idx >= 0 {
-			host = host[:idx]
+		// strip port, avoid breaking ipv6
+		if h, _, err := net.SplitHostPort(host); err == nil {
+			host = h
 		}
 		if err := st.AddScopeEntry(host); err != nil {
 			logger.Error("scope: add entry: %v", err)

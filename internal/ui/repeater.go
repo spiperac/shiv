@@ -152,7 +152,7 @@ func (r *repeaterTab) buildTabItem(t store.RepeaterTab) *container.TabItem {
 
 	var lastTx store.Transaction
 
-	inspectBtn := widget.NewButtonWithIcon("Inspector", theme.InfoIcon(), func() {
+	inspectBtn := widget.NewButtonWithIcon("Inspector", AppIcon("inspector"), func() {
 		showInspectorDialog(lastTx, r.win)
 	})
 	inspectBtn.Disable()
@@ -196,7 +196,20 @@ func (r *repeaterTab) buildTabItem(t store.RepeaterTab) *container.TabItem {
 	reqEditor.onCtrlS = doSend
 
 	cloneBtn := widget.NewButtonWithIcon("Clone", theme.ContentCopyIcon(), func() {
-		r.AddTab(t.Name, t.Host, t.Port, t.TLS, reqEditor.Text)
+		raw := reqEditor.Text
+		// grab first line e.g. "POST /new/path HTTP/1.1"
+		firstLine := strings.SplitN(raw, "\n", 2)[0]
+		parts := strings.Fields(firstLine)
+		name := t.Name // fallback
+		if len(parts) >= 2 {
+			path := parts[1]
+			if len(path) > 20 {
+				path = path[:20] + "..."
+			}
+			name = fmt.Sprintf("%s %s", parts[0], path)
+		}
+		host, port, useTLS := parseHostFromRaw(raw)
+		r.AddTab(name, host, port, useTLS, raw)
 	})
 
 	toolbar := container.NewVBox(
@@ -225,15 +238,8 @@ func (r *repeaterTab) buildTabItem(t store.RepeaterTab) *container.TabItem {
 	return tabItem
 }
 
-func scheme(useTLS bool) string {
-	if useTLS {
-		return "https"
-	}
-	return "http"
-}
-
 func sendRawRequest(host string, port int, useTLS bool, rawReq string) (string, error) {
-	addr := fmt.Sprintf("%s:%d", host, port)
+	addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
 
 	var conn net.Conn
 	var err error
@@ -306,10 +312,10 @@ func sendRawRequest(host string, port int, useTLS bool, rawReq string) (string, 
 	}
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("HTTP/1.1 %d %s\r\n", resp.StatusCode, http.StatusText(resp.StatusCode)))
+	fmt.Fprintf(&sb, "HTTP/1.1 %d %s\r\n", resp.StatusCode, http.StatusText(resp.StatusCode))
 	for k, vv := range resp.Header {
 		for _, v := range vv {
-			sb.WriteString(fmt.Sprintf("%s: %s\r\n", k, v))
+			fmt.Fprintf(&sb, "%s: %s\r\n", k, v)
 		}
 	}
 	sb.WriteString("\r\n")
@@ -364,7 +370,7 @@ func parseRawHeaders(raw string) http.Header {
 }
 
 func parseHostFromRaw(raw string) (host string, port int, useTLS bool) {
-	for _, line := range strings.Split(raw, "\n") {
+	for line := range strings.SplitSeq(raw, "\n") {
 		line = strings.TrimSpace(line)
 		if strings.HasPrefix(strings.ToLower(line), "host:") {
 			hostVal := strings.TrimSpace(line[5:])

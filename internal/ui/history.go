@@ -59,7 +59,7 @@ func (h *historyTab) build() fyne.CanvasObject {
 	h.showOutScope = widget.NewCheck("Show out-of-scope", func(_ bool) { h.applyFilter() })
 	h.showOutScope.Checked = true
 
-	h.scopeBtn = widget.NewButtonWithIcon("Scope", theme.SearchReplaceIcon(), func() {
+	h.scopeBtn = widget.NewButtonWithIcon("Scope", AppIcon("scope"), func() {
 		showScopeDialog(h.st, h.win)
 	})
 
@@ -141,7 +141,7 @@ func (h *historyTab) build() fyne.CanvasObject {
 
 	reqPane := container.NewBorder(newBoldLabel("Request"), nil, nil, nil,
 		container.NewScroll(h.reqLabel))
-	inspectBtn := widget.NewButtonWithIcon("Inspector", theme.InfoIcon(), func() {
+	inspectBtn := widget.NewButtonWithIcon("Inspector", AppIcon("inspector"), func() {
 		if !h.hasSelected {
 			return
 		}
@@ -183,7 +183,7 @@ func (h *historyTab) build() fyne.CanvasObject {
 		}
 	})
 
-	h.sendLoot = widget.NewButtonWithIcon("Send to Loot", theme.WarningIcon(), func() {
+	h.sendLoot = widget.NewButtonWithIcon("Send to Loot", AppIcon("loot"), func() {
 		if !h.hasSelected {
 			return
 		}
@@ -193,7 +193,7 @@ func (h *historyTab) build() fyne.CanvasObject {
 	h.sendRepeater.Disable()
 	h.sendLoot.Disable()
 
-	clearBtn := widget.NewButtonWithIcon("Clear History", theme.DeleteIcon(), func() {
+	clearBtn := widget.NewButtonWithIcon("Clear History", AppIcon("delete"), func() {
 		if err := h.st.ClearHistory(); err != nil {
 			logger.Error("clear history: %v", err)
 			return
@@ -397,10 +397,6 @@ func formatResponse(tx store.Transaction) string {
 		}
 	}
 	return sb.String()
-}
-
-func newLabel(text string) *widget.Label {
-	return widget.NewLabel(text)
 }
 
 func newBoldLabel(text string) *widget.Label {

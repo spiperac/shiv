@@ -44,13 +44,8 @@ type lootTab struct {
 	selectedIdx int
 }
 
-func newLootTab(st *store.Store, win fyne.Window) fyne.CanvasObject {
-	l := &lootTab{st: st, win: win, selectedIdx: -1}
-	return l.build()
-}
-
 var lootColumns = []string{"Severity", "Title", "Created"}
-var lootColumnWidths = []float32{100, 300, 160}
+var lootColumnWidths = []float32{300, 500, 360}
 
 func (l *lootTab) build() fyne.CanvasObject {
 	l.table = widget.NewTable(
@@ -201,7 +196,8 @@ func (l *lootTab) showAddDialog(historyID *uint64) {
 		widget.NewFormItem("Notes", notesEntry),
 	)
 
-	dialog.ShowCustomConfirm("Add Loot", "Save", "Cancel", form, func(ok bool) {
+	sized := container.NewGridWrap(fyne.NewSize(500, 350), form)
+	dialog.ShowCustomConfirm("Add Loot", "Save", "Cancel", sized, func(ok bool) {
 		if !ok {
 			return
 		}
@@ -311,7 +307,7 @@ func (l *lootTab) showLinkedRequest(e store.LootEntry) {
 			respEntry := newReadOnlyEntry()
 			respEntry.SetText(formatResponse(*tx))
 
-			inspectBtn := widget.NewButtonWithIcon("Inspector", theme.InfoIcon(), func() {
+			inspectBtn := widget.NewButtonWithIcon("Inspector", AppIcon("inspector"), func() {
 				showInspectorDialog(*tx, l.win)
 			})
 
@@ -333,7 +329,6 @@ func (l *lootTab) showLinkedRequest(e store.LootEntry) {
 				container.NewBorder(nil, sendBtn, nil, nil, split),
 				l.win,
 			)
-			d.Resize(fyne.NewSize(900, 600))
 
 			sendBtn.OnTapped = func() {
 				host, portStr, err := net.SplitHostPort(tx.Host)
@@ -355,6 +350,7 @@ func (l *lootTab) showLinkedRequest(e store.LootEntry) {
 			}
 
 			d.Show()
+			d.Resize(fyne.NewSize(900, 600))
 		})
 	}()
 }

@@ -11,13 +11,12 @@ import (
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/storage"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 	"github.com/shiv/assets"
 )
-
-var logoBytes []byte
 
 const maxRecentProjects = 10
 
@@ -31,27 +30,39 @@ func ShowLaunchScreen(app fyne.App, onSelect func(projectPath string, w fyne.Win
 	w.Resize(fyne.NewSize(560, 420))
 	w.CenterOnScreen()
 	w.SetFixedSize(true)
+	var list *widget.List
+	var onDeleteBtn func(widget.ListItemID)
 
 	recents, _ := loadRecents()
 
-	list := widget.NewList(
+	list = widget.NewList(
 		func() int { return len(recents) },
 		func() fyne.CanvasObject {
 			return container.NewHBox(
-				widget.NewIcon(theme.DocumentIcon()),
+				widget.NewIcon(AppIcon("project")),
 				container.NewVBox(
 					widget.NewLabel("name"),
 					widget.NewLabel("date"),
 				),
+				layout.NewSpacer(),
+				widget.NewButtonWithIcon("Delete", AppIcon("delete"), nil),
 			)
 		},
 		func(i widget.ListItemID, obj fyne.CanvasObject) {
 			box := obj.(*fyne.Container).Objects[1].(*fyne.Container)
+			hbox := obj.(*fyne.Container)
 			box.Objects[0].(*widget.Label).SetText(filepath.Base(recents[i].Path))
 			box.Objects[1].(*widget.Label).SetText(recents[i].LastOpen.Format("2006-01-02 15:04"))
 			box.Objects[1].(*widget.Label).Importance = widget.LowImportance
+			hbox.Objects[3].(*widget.Button).OnTapped = func() { onDeleteBtn(i) }
 		},
 	)
+
+	onDeleteBtn = func(i widget.ListItemID) {
+		deleteRecent(recents[i].Path)
+		recents, _ = loadRecents()
+		list.Refresh()
+	}
 
 	list.OnSelected = func(i widget.ListItemID) {
 		path := recents[i].Path
@@ -180,6 +191,26 @@ func saveRecent(projectPath string) {
 		return
 	}
 	data, err := json.Marshal(updated)
+	if err != nil {
+		return
+	}
+	os.WriteFile(path, data, 0o644)
+}
+
+func deleteRecent(projectPath string) {
+	os.Remove(projectPath)
+	recents, _ := loadRecents()
+	filtered := recents[:0]
+	for _, r := range recents {
+		if r.Path != projectPath {
+			filtered = append(filtered, r)
+		}
+	}
+	path, err := recentsPath()
+	if err != nil {
+		return
+	}
+	data, err := json.Marshal(filtered)
 	if err != nil {
 		return
 	}
