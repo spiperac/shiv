@@ -117,11 +117,6 @@ func showSettingsDialog(app fyne.App, _ fyne.Window, proxyServer *proxy.Proxy) {
 	settingsWin.SetOnClosed(func() {
 		settingsWin = nil
 	})
-	settingsWin.Canvas().SetOnTypedKey(func(key *fyne.KeyEvent) {
-		if key.Name == fyne.KeyEscape {
-			settingsWin.Close()
-		}
-	})
 	closeOnEscape(settingsWin, settingsWin.Close)
 	settingsWin.Show()
 }

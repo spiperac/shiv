@@ -64,15 +64,14 @@ type intruderTab struct {
 	stopChan chan struct{}
 }
 
-func newIntruderTab(win fyne.Window, projectStore *store.Store, repeater *repeaterTab, loot *lootTab) fyne.CanvasObject {
-	tab := &intruderTab{
+func newIntruderTab(win fyne.Window, projectStore *store.Store, repeater *repeaterTab, loot *lootTab) *intruderTab {
+	return &intruderTab{
 		win:          win,
 		projectStore: projectStore,
 		repeater:     repeater,
 		loot:         loot,
 		config:       projectStore.LoadIntruderConfig(),
 	}
-	return tab.build()
 }
 
 var intruderResultColumns = []string{"Payload", "Status", "Size", "Duration"}
@@ -209,20 +208,16 @@ func (t *intruderTab) build() fyne.CanvasObject {
 		if t.selectedResult == nil {
 			return
 		}
-		host, portStr, err := net.SplitHostPort(parseHostFromRawString(t.selectedResult.rawReq))
-		if err != nil {
-			host = parseHostFromRawString(t.selectedResult.rawReq)
-			portStr = "443"
-		}
-		port, _ := strconv.Atoi(portStr)
-		path := pathOf(extractURL(t.selectedResult.rawReq))
+		host, port, useTLS := parseHostFromRaw(t.selectedResult.rawReq)
+		path := pathOf(extractURLFromRaw(t.selectedResult.rawReq))
 		if len(path) > 20 {
 			path = path[:20] + "..."
 		}
 		name := fmt.Sprintf("Intruder %s", path)
-		t.repeater.AddTab(name, host, port, port == 443, t.selectedResult.rawReq)
+		t.repeater.AddTab(name, host, port, useTLS, t.selectedResult.rawReq)
 	})
 	t.sendToRepeaterBtn.Disable()
+
 	t.sendToLootBtn = widget.NewButtonWithIcon("Loot", AppIcon("loot"), func() {
 		if t.selectedResult == nil {
 			return
@@ -251,6 +246,7 @@ func (t *intruderTab) build() fyne.CanvasObject {
 
 	detailPane := container.NewHSplit(respPane, requestPane)
 	detailPane.SetOffset(0.5)
+
 	t.table = widget.NewTable(
 		func() (int, int) {
 			t.mu.RLock()
@@ -365,25 +361,6 @@ func (t *intruderTab) build() fyne.CanvasObject {
 	return container.NewBorder(toolbar, nil, nil, nil, mainSplit)
 }
 
-func parseHostFromRawString(rawReq string) string {
-	for line := range strings.SplitSeq(rawReq, "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(strings.ToLower(line), "host:") {
-			return strings.TrimSpace(line[5:])
-		}
-	}
-	return ""
-}
-
-func extractURL(rawReq string) string {
-	firstLine := strings.SplitN(rawReq, "\n", 2)[0]
-	parts := strings.Fields(firstLine)
-	if len(parts) >= 2 {
-		return parts[1]
-	}
-	return "/"
-}
-
 func (t *intruderTab) followRedirect(rawResp string, originalHost string) (string, bool) {
 	firstLine := strings.SplitN(rawResp, "\r\n", 2)[0]
 	parts := strings.Fields(firstLine)
@@ -404,7 +381,6 @@ func (t *intruderTab) followRedirect(rawResp string, originalHost string) (strin
 			break
 		}
 	}
-
 	if location == "" {
 		return "", false
 	}
@@ -419,8 +395,7 @@ func (t *intruderTab) followRedirect(rawResp string, originalHost string) (strin
 	case "always":
 	}
 
-	var redirectHost string
-	var redirectPath string
+	var redirectHost, redirectPath string
 	var useTLS bool
 
 	if strings.HasPrefix(location, "https://") {

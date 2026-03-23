@@ -47,6 +47,15 @@ type lootTab struct {
 var lootColumns = []string{"Severity", "Title", "Created"}
 var lootColumnWidths = []float32{300, 500, 360}
 
+func newLootTab(projectStore *store.Store, win fyne.Window, repeater *repeaterTab) *lootTab {
+	return &lootTab{
+		projectStore: projectStore,
+		win:          win,
+		repeater:     repeater,
+		selectedIdx:  -1,
+	}
+}
+
 func (l *lootTab) build() fyne.CanvasObject {
 	l.table = widget.NewTable(
 		func() (int, int) { return len(l.entries) + 1, len(lootColumns) },
@@ -146,8 +155,7 @@ func (l *lootTab) build() fyne.CanvasObject {
 		if l.selectedIdx < 0 || l.selectedIdx >= len(l.entries) {
 			return
 		}
-		entry := l.entries[l.selectedIdx]
-		l.showLinkedRequest(entry)
+		l.showLinkedRequest(l.entries[l.selectedIdx])
 	})
 	l.viewReqBtn.Disable()
 
@@ -257,10 +265,10 @@ func (l *lootTab) exportMarkdown() {
 			Notes:    entry.Notes,
 		}
 		if entry.HistoryID != nil {
-			transaction, err := l.projectStore.GetTransaction(*entry.HistoryID)
+			tx, err := l.projectStore.GetTransaction(*entry.HistoryID)
 			if err == nil {
-				ed.Request = formatRequest(*transaction)
-				ed.Response = formatResponse(*transaction)
+				ed.Request = formatRequest(*tx)
+				ed.Response = formatResponse(*tx)
 			}
 		} else {
 			ed.Request = entry.RawRequest
@@ -282,6 +290,7 @@ func (l *lootTab) exportMarkdown() {
 		dialog.ShowError(err, l.win)
 		return
 	}
+
 	saveDialog := dialog.NewFileSave(func(writeCloser fyne.URIWriteCloser, err error) {
 		if err != nil || writeCloser == nil {
 			return
@@ -306,26 +315,25 @@ func (l *lootTab) showLinkedRequest(entry store.LootEntry) {
 
 func (l *lootTab) showLinkedRequestFromHistory(entry store.LootEntry) {
 	go func() {
-		transaction, err := l.projectStore.GetTransaction(*entry.HistoryID)
+		tx, err := l.projectStore.GetTransaction(*entry.HistoryID)
 		if err != nil {
 			logger.Error("loot: get linked request: %v", err)
 			return
 		}
 		fyne.Do(func() {
 			l.showRequestResponseDialog(
-				fmt.Sprintf("Linked Request — %s %s", transaction.Method, transaction.URL),
-				formatRequest(*transaction),
-				formatResponse(*transaction),
-				transaction.Host,
-				transaction.TLS,
+				fmt.Sprintf("Linked Request — %s %s", tx.Method, tx.URL),
+				formatRequest(*tx),
+				formatResponse(*tx),
+				tx.Host,
+				tx.TLS,
 			)
 		})
 	}()
 }
 
 func (l *lootTab) showLinkedRequestFromRaw(entry store.LootEntry) {
-	host := parseHostFromRawString(entry.RawRequest)
-	_, _, useTLS := parseHostFromRaw(entry.RawRequest)
+	host, _, useTLS := parseHostFromRaw(entry.RawRequest)
 	l.showRequestResponseDialog("Linked Request", entry.RawRequest, entry.RawResponse, host, useTLS)
 }
 
@@ -357,8 +365,9 @@ func (l *lootTab) showRequestResponseDialog(title, rawRequest, rawResponse, host
 		hostOnly, portStr, err := net.SplitHostPort(host)
 		if err != nil {
 			hostOnly = host
-			portStr = "443"
-			if !useTLS {
+			if useTLS {
+				portStr = "443"
+			} else {
 				portStr = "80"
 			}
 		}
@@ -377,6 +386,7 @@ func (l *lootTab) showRequestResponseDialog(title, rawRequest, rawResponse, host
 	linkedDialog.Resize(fyne.NewSize(900, 600))
 }
 
+// extractURLFromRaw extracts the URL path from the first line of a raw HTTP request.
 func extractURLFromRaw(rawRequest string) string {
 	firstLine := strings.SplitN(rawRequest, "\n", 2)[0]
 	parts := strings.Fields(firstLine)
@@ -386,6 +396,7 @@ func extractURLFromRaw(rawRequest string) string {
 	return "/"
 }
 
+// extractMethodFromRaw extracts the HTTP method from the first line of a raw HTTP request.
 func extractMethodFromRaw(rawRequest string) string {
 	firstLine := strings.SplitN(rawRequest, "\n", 2)[0]
 	parts := strings.Fields(firstLine)

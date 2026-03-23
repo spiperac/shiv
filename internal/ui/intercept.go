@@ -25,21 +25,18 @@ type interceptTab struct {
 	drop    *widget.Button
 }
 
-func newInterceptTab(st *store.Store) fyne.CanvasObject {
-	t := &interceptTab{projectStore: st}
-	return t.build()
+func newInterceptTab(projectStore *store.Store) *interceptTab {
+	return &interceptTab{projectStore: projectStore}
 }
 
 func (t *interceptTab) build() fyne.CanvasObject {
 	t.toggle = widget.NewCheck("Intercept ON", func(on bool) {
 		t.projectStore.Intercept.SetEnabled(on)
 		if !on {
-			// If a request is waiting on Reply, forward it unmodified.
-			// Without this the proxy goroutine blocks forever.
 			if t.pending != nil {
-				p := t.pending
+				pending := t.pending
 				t.pending = nil
-				p.Reply <- store.Decision{Forward: true, Request: p.Request, Body: p.Body}
+				pending.Reply <- store.Decision{Forward: true, Request: pending.Request, Body: pending.Body}
 			}
 			t.clearEditor()
 		}
@@ -84,10 +81,10 @@ func (t *interceptTab) watchQueue() {
 	}
 }
 
-func (t *interceptTab) showRequest(p *store.PendingRequest) {
-	t.pending = p
+func (t *interceptTab) showRequest(pending *store.PendingRequest) {
+	t.pending = pending
 	t.editor.Enable()
-	t.editor.SetText(formatRawRequest(p.Request, p.Body))
+	t.editor.SetText(formatRawRequest(pending.Request, pending.Body))
 	t.forward.Enable()
 	t.drop.Enable()
 }
@@ -96,21 +93,21 @@ func (t *interceptTab) decide(forward bool) {
 	if t.pending == nil {
 		return
 	}
-	pendingRequest := t.pending
-	rawText := t.editor.Text // capture BEFORE clearing
+	pending := t.pending
+	rawText := t.editor.Text
 	t.pending = nil
 	t.clearEditor()
 
 	if forward {
-		req, body, err := parseRawRequest(rawText, pendingRequest.Request)
+		req, body, err := parseRawRequest(rawText, pending.Request)
 		if err != nil {
 			logger.Error("intercept: parse edited request: %v — forwarding original", err)
-			req = pendingRequest.Request
-			body = pendingRequest.Body
+			req = pending.Request
+			body = pending.Body
 		}
-		pendingRequest.Reply <- store.Decision{Forward: true, Request: req, Body: body}
+		pending.Reply <- store.Decision{Forward: true, Request: req, Body: body}
 	} else {
-		pendingRequest.Reply <- store.Decision{Forward: false}
+		pending.Reply <- store.Decision{Forward: false}
 	}
 }
 

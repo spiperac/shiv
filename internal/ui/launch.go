@@ -1,7 +1,6 @@
 package ui
 
 import (
-	_ "embed"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -15,6 +14,7 @@ import (
 	"fyne.io/fyne/v2/storage"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
+
 	"github.com/shiv/assets"
 )
 
@@ -30,6 +30,7 @@ func ShowLaunchScreen(app fyne.App, onSelect func(projectPath string, w fyne.Win
 	launchWin.Resize(fyne.NewSize(560, 420))
 	launchWin.CenterOnScreen()
 	launchWin.SetFixedSize(true)
+
 	var list *widget.List
 	var onDeleteBtn func(widget.ListItemID)
 
@@ -49,8 +50,8 @@ func ShowLaunchScreen(app fyne.App, onSelect func(projectPath string, w fyne.Win
 			)
 		},
 		func(i widget.ListItemID, obj fyne.CanvasObject) {
-			box := obj.(*fyne.Container).Objects[1].(*fyne.Container)
 			hbox := obj.(*fyne.Container)
+			box := hbox.Objects[1].(*fyne.Container)
 			box.Objects[0].(*widget.Label).SetText(filepath.Base(recents[i].Path))
 			box.Objects[1].(*widget.Label).SetText(recents[i].LastOpen.Format("2006-01-02 15:04"))
 			box.Objects[1].(*widget.Label).Importance = widget.LowImportance
@@ -181,7 +182,6 @@ func saveRecent(projectPath string) {
 	}
 
 	updated := append([]RecentProject{{Path: projectPath, LastOpen: time.Now()}}, filtered...)
-
 	if len(updated) > maxRecentProjects {
 		updated = updated[:maxRecentProjects]
 	}

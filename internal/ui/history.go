@@ -34,8 +34,6 @@ type historyTab struct {
 	showOutScope *widget.Check
 	reqLabel     *readOnlyEntry
 	respLabel    *readOnlyEntry
-	sendRepeater *widget.Button
-	sendLoot     *widget.Button
 	scopeBtn     *widget.Button
 
 	selectedTx  store.Transaction
@@ -45,9 +43,8 @@ type historyTab struct {
 var tableColumns = []string{"Method", "Host", "Path", "Status", "Size", "Duration"}
 var columnWidths = []float32{80, 200, 300, 70, 90, 90}
 
-func newHistoryTab(projectStore *store.Store, win fyne.Window, repeater *repeaterTab, loot *lootTab) fyne.CanvasObject {
-	h := &historyTab{projectStore: projectStore, win: win, repeater: repeater, loot: loot}
-	return h.build()
+func newHistoryTab(projectStore *store.Store, win fyne.Window, repeater *repeaterTab, loot *lootTab) *historyTab {
+	return &historyTab{projectStore: projectStore, win: win, repeater: repeater, loot: loot}
 }
 
 func (h *historyTab) build() fyne.CanvasObject {
@@ -76,8 +73,6 @@ func (h *historyTab) build() fyne.CanvasObject {
 		h.hasSelected = false
 		h.reqLabel.SetText("")
 		h.respLabel.SetText("")
-		h.sendRepeater.Disable()
-		h.sendLoot.Disable()
 	})
 
 	filterBar := container.NewBorder(nil, nil, nil,
@@ -137,18 +132,16 @@ func (h *historyTab) build() fyne.CanvasObject {
 
 		h.selectedTx = tx
 		h.hasSelected = true
-		h.sendRepeater.Enable()
-		h.sendLoot.Enable()
 
 		go func() {
-			fullTransaction, err := h.projectStore.GetTransaction(tx.ID)
+			fullTx, err := h.projectStore.GetTransaction(tx.ID)
 			if err != nil {
 				logger.Error("history: get transaction: %v", err)
 				return
 			}
 			fyne.Do(func() {
-				h.selectedTx = *fullTransaction
-				h.showDetail(*fullTransaction)
+				h.selectedTx = *fullTx
+				h.showDetail(*fullTx)
 			})
 		}()
 	}
@@ -156,43 +149,26 @@ func (h *historyTab) build() fyne.CanvasObject {
 	h.reqLabel = newReadOnlyEntry()
 	h.respLabel = newReadOnlyEntry()
 
-	h.sendRepeater = widget.NewButtonWithIcon("Send to Repeater", AppIcon("repeater"), func() {
+	sendToRepeaterBtn := widget.NewButtonWithIcon("Send to Repeater", AppIcon("repeater"), func() {
 		if !h.hasSelected {
 			return
 		}
-		tx := h.selectedTx
-		host, portStr, err := net.SplitHostPort(tx.Host)
-		if err != nil {
-			host = tx.Host
-			portStr = "443"
-			if !tx.TLS {
-				portStr = "80"
-			}
-		}
-		port, _ := strconv.Atoi(portStr)
-		path := pathOf(tx.URL)
-		if len(path) > 20 {
-			path = path[:20] + "..."
-		}
-		name := fmt.Sprintf("%s %s", tx.Method, path)
-		h.repeater.AddTab(name, host, port, tx.TLS, formatRequest(tx))
+		h.sendToRepeater(h.selectedTx)
 	})
-	h.sendRepeater.Disable()
 
 	h.win.Canvas().AddShortcut(&desktop.CustomShortcut{KeyName: fyne.KeyR, Modifier: fyne.KeyModifierControl}, func(_ fyne.Shortcut) {
 		if h.hasSelected {
-			h.sendRepeater.OnTapped()
+			h.sendToRepeater(h.selectedTx)
 		}
 	})
 
-	h.sendLoot = widget.NewButtonWithIcon("Send to Loot", AppIcon("loot"), func() {
+	sendToLootBtn := widget.NewButtonWithIcon("Send to Loot", AppIcon("loot"), func() {
 		if !h.hasSelected {
 			return
 		}
 		id := h.selectedTx.ID
 		h.loot.showAddDialog(&id, "", "")
 	})
-	h.sendLoot.Disable()
 
 	inspectBtn := widget.NewButtonWithIcon("Inspector", AppIcon("inspector"), func() {
 		if !h.hasSelected {
@@ -202,13 +178,13 @@ func (h *historyTab) build() fyne.CanvasObject {
 	})
 
 	reqPane := container.NewBorder(
-		container.NewBorder(nil, nil, nil, h.sendRepeater, newBoldLabel("Request")),
+		container.NewBorder(nil, nil, nil, sendToRepeaterBtn, newBoldLabel("Request")),
 		nil, nil, nil,
 		container.NewScroll(h.reqLabel),
 	)
 
 	respPane := container.NewBorder(
-		container.NewBorder(nil, nil, nil, container.NewHBox(h.sendLoot, inspectBtn), newBoldLabel("Response")),
+		container.NewBorder(nil, nil, nil, container.NewHBox(sendToLootBtn, inspectBtn), newBoldLabel("Response")),
 		nil, nil, nil,
 		container.NewScroll(h.respLabel),
 	)
@@ -239,6 +215,24 @@ func (h *historyTab) build() fyne.CanvasObject {
 	go h.watchUpdates()
 
 	return mainSplit
+}
+
+func (h *historyTab) sendToRepeater(tx store.Transaction) {
+	host, portStr, err := net.SplitHostPort(tx.Host)
+	if err != nil {
+		host = tx.Host
+		portStr = "443"
+		if !tx.TLS {
+			portStr = "80"
+		}
+	}
+	port, _ := strconv.Atoi(portStr)
+	path := pathOf(tx.URL)
+	if len(path) > 20 {
+		path = path[:20] + "..."
+	}
+	name := fmt.Sprintf("%s %s", tx.Method, path)
+	h.repeater.AddTab(name, host, port, tx.TLS, formatRequest(tx))
 }
 
 func (h *historyTab) cellText(tx store.Transaction, col int) string {

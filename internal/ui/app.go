@@ -41,7 +41,6 @@ func ShowMainWindow(app fyne.App, projectStore *store.Store, proxyServer *proxy.
 
 	proxyToggleBtn := widget.NewButtonWithIcon("", theme.MediaRecordIcon(), nil)
 
-	// Listen to binding changes so button updates from anywhere — settings or toggle
 	proxyRunningBinding.AddListener(binding.NewDataListener(func() {
 		running, _ := proxyRunningBinding.Get()
 		if running {
@@ -97,20 +96,23 @@ func ShowMainWindow(app fyne.App, projectStore *store.Store, proxyServer *proxy.
 		layout.NewSpacer(),
 	)
 
+	// All tabs follow the same pattern:
+	// 1. Create struct via newXTab(...)
+	// 2. Wire cross-tab dependencies
+	// 3. Call .build() when passing to AppTabs
 	repeater := newRepeaterTab(projectStore, mainWin)
-	loot := &lootTab{projectStore: projectStore, win: mainWin, repeater: repeater, selectedIdx: -1}
+	loot := newLootTab(projectStore, mainWin, repeater)
 	repeater.loot = loot
-	historyTab := newHistoryTab(projectStore, mainWin, repeater, loot)
-	interceptTab := newInterceptTab(projectStore)
-	lootContent := loot.build()
-	intruderTab := newIntruderTab(mainWin, projectStore, repeater, loot)
+	history := newHistoryTab(projectStore, mainWin, repeater, loot)
+	intercept := newInterceptTab(projectStore)
+	intruder := newIntruderTab(mainWin, projectStore, repeater, loot)
 
 	tabs := container.NewAppTabs(
-		container.NewTabItemWithIcon("History", AppIcon("history"), historyTab),
-		container.NewTabItemWithIcon("Intercept", AppIcon("intercept"), interceptTab),
+		container.NewTabItemWithIcon("History", AppIcon("history"), history.build()),
+		container.NewTabItemWithIcon("Intercept", AppIcon("intercept"), intercept.build()),
 		container.NewTabItemWithIcon("Repeater", AppIcon("repeater"), repeater.build()),
-		container.NewTabItemWithIcon("Intruder", AppIcon("intruder"), intruderTab),
-		container.NewTabItemWithIcon("Loot", AppIcon("loot"), lootContent),
+		container.NewTabItemWithIcon("Intruder", AppIcon("intruder"), intruder.build()),
+		container.NewTabItemWithIcon("Loot", AppIcon("loot"), loot.build()),
 	)
 	tabs.SetTabLocation(container.TabLocationTop)
 
