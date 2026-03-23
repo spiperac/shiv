@@ -45,8 +45,8 @@ func installLinux(certPath string) (string, error) {
 		nssdb := filepath.Join(home, ".pki", "nssdb")
 		if err := os.MkdirAll(nssdb, 0700); err == nil {
 			cmd := exec.Command("certutil", "-A", "-n", "Shiv CA", "-t", "CT,,", "-i", certPath, "-d", "sql:"+nssdb)
-			if out, err := cmd.CombinedOutput(); err != nil {
-				errs = append(errs, fmt.Sprintf("Chrome NSS: %v\n%s", err, out))
+			if cmdOut, err := cmd.CombinedOutput(); err != nil {
+				errs = append(errs, fmt.Sprintf("Chrome NSS: %v\n%s", err, cmdOut))
 			} else {
 				installed = append(installed, "Chrome/Chromium")
 			}
@@ -128,9 +128,9 @@ func firefoxProfiles() ([]string, error) {
 		if err != nil {
 			continue
 		}
-		for _, e := range entries {
-			if e.IsDir() {
-				profiles = append(profiles, filepath.Join(dir, e.Name()))
+		for _, dirEntry := range entries {
+			if dirEntry.IsDir() {
+				profiles = append(profiles, filepath.Join(dir, dirEntry.Name()))
 			}
 		}
 	}
@@ -146,12 +146,4 @@ func manualInstructions(certPath, reason string) error {
 		"  Chrome/Chromium: Settings → Privacy → Security → Manage certificates → Authorities → Import\n" +
 		"  Firefox:         Settings → Privacy & Security → Certificates → View Certificates → Authorities → Import\n" +
 		"  NixOS:           security.pki.certificateFiles = [ \"" + certPath + "\" ]")
-}
-
-func copyFile(src, dst string) error {
-	data, err := os.ReadFile(src)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(dst, data, 0644)
 }

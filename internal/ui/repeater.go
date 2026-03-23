@@ -26,19 +26,19 @@ import (
 )
 
 type repeaterTab struct {
-	st      *store.Store
-	tabs    *container.DocTabs
-	win     fyne.Window
-	tabIDs  map[*container.TabItem]int64
-	sendFns map[*container.TabItem]func()
+	projectStore *store.Store
+	tabs         *container.DocTabs
+	win          fyne.Window
+	tabIDs       map[*container.TabItem]int64
+	sendFns      map[*container.TabItem]func()
 }
 
-func newRepeaterTab(st *store.Store, win fyne.Window) *repeaterTab {
+func newRepeaterTab(projectStore *store.Store, win fyne.Window) *repeaterTab {
 	return &repeaterTab{
-		st:      st,
-		win:     win,
-		tabIDs:  make(map[*container.TabItem]int64),
-		sendFns: make(map[*container.TabItem]func()),
+		projectStore: projectStore,
+		win:          win,
+		tabIDs:       make(map[*container.TabItem]int64),
+		sendFns:      make(map[*container.TabItem]func()),
 	}
 }
 
@@ -56,16 +56,16 @@ func newRepeaterEntry() *repeaterEntry {
 	return e
 }
 
-func (e *repeaterEntry) TypedShortcut(s fyne.Shortcut) {
-	if cs, ok := s.(*desktop.CustomShortcut); ok {
-		if cs.KeyName == fyne.KeyS && cs.Modifier == fyne.KeyModifierControl {
+func (e *repeaterEntry) TypedShortcut(shortcut fyne.Shortcut) {
+	if customShortcut, ok := shortcut.(*desktop.CustomShortcut); ok {
+		if customShortcut.KeyName == fyne.KeyS && customShortcut.Modifier == fyne.KeyModifierControl {
 			if e.onCtrlS != nil {
 				e.onCtrlS()
 			}
 			return
 		}
 	}
-	e.Entry.TypedShortcut(s)
+	e.Entry.TypedShortcut(shortcut)
 }
 
 func (r *repeaterTab) build() fyne.CanvasObject {
@@ -83,9 +83,9 @@ func (r *repeaterTab) build() fyne.CanvasObject {
 	})
 
 	r.tabs.OnClosed = func(closed *container.TabItem) {
-		if id, ok := r.tabIDs[closed]; ok {
-			logger.Info("repeater: OnClosed called, found=%v id=%d", ok, id)
-			if err := r.st.DeleteRepeaterTab(id); err != nil {
+		if tabId, ok := r.tabIDs[closed]; ok {
+			logger.Info("repeater: OnClosed called, found=%v id=%d", ok, tabId)
+			if err := r.projectStore.DeleteRepeaterTab(tabId); err != nil {
 				logger.Error("repeater: delete tab: %v", err)
 			}
 			delete(r.tabIDs, closed)
@@ -101,7 +101,7 @@ func (r *repeaterTab) build() fyne.CanvasObject {
 			TLS:        false,
 			RawRequest: "",
 		}
-		id, err := r.st.SaveRepeaterTab(saved)
+		id, err := r.projectStore.SaveRepeaterTab(saved)
 		if err != nil {
 			logger.Error("repeater: save new tab: %v", err)
 			return container.NewTabItem("New Tab", widget.NewLabel(""))
@@ -110,7 +110,7 @@ func (r *repeaterTab) build() fyne.CanvasObject {
 		return r.buildTabItem(saved)
 	}
 
-	saved, err := r.st.AllRepeaterTabs()
+	saved, err := r.projectStore.AllRepeaterTabs()
 	if err != nil {
 		logger.Error("repeater: load tabs: %v", err)
 	}
@@ -129,7 +129,7 @@ func (r *repeaterTab) AddTab(name, host string, port int, useTLS bool, rawReques
 		TLS:        useTLS,
 		RawRequest: rawRequest,
 	}
-	id, err := r.st.SaveRepeaterTab(saved)
+	id, err := r.projectStore.SaveRepeaterTab(saved)
 	if err != nil {
 		logger.Error("repeater: save tab: %v", err)
 		return
@@ -140,24 +140,24 @@ func (r *repeaterTab) AddTab(name, host string, port int, useTLS bool, rawReques
 	r.tabs.Select(item)
 }
 
-func (r *repeaterTab) buildTabItem(t store.RepeaterTab) *container.TabItem {
+func (r *repeaterTab) buildTabItem(tab store.RepeaterTab) *container.TabItem {
 	reqEditor := newRepeaterEntry()
 	reqEditor.SetPlaceHolder("Paste or edit raw HTTP request here...")
-	reqEditor.SetText(t.RawRequest)
+	reqEditor.SetText(tab.RawRequest)
 
 	respLabel := newReadOnlyEntry()
 
 	sendBtn := widget.NewButtonWithIcon("Send", theme.MailSendIcon(), nil)
 	sendBtn.Importance = widget.HighImportance
 
-	var lastTx store.Transaction
+	var lastTransaction store.Transaction
 
 	inspectBtn := widget.NewButtonWithIcon("Inspector", AppIcon("inspector"), func() {
-		showInspectorDialog(lastTx, r.win)
+		showInspectorDialog(lastTransaction, r.win)
 	})
 	inspectBtn.Disable()
 
-	tabID := t.ID
+	tabID := tab.ID
 
 	doSend := func() {
 		if sendBtn.Disabled() {
@@ -179,13 +179,13 @@ func (r *repeaterTab) buildTabItem(t store.RepeaterTab) *container.TabItem {
 					logger.Error("repeater: send: %v", err)
 				} else {
 					respLabel.SetText(resp)
-					lastTx = store.Transaction{
+					lastTransaction = store.Transaction{
 						RespHeaders: parseRawHeaders(resp),
 						RespBody:    []byte(resp),
 					}
 					inspectBtn.Enable()
 				}
-				if saveErr := r.st.UpdateRepeaterTab(tabID, rawReq, respLabel.Text); saveErr != nil {
+				if saveErr := r.projectStore.UpdateRepeaterTab(tabID, rawReq, respLabel.Text); saveErr != nil {
 					logger.Error("repeater: update tab: %v", saveErr)
 				}
 			})
@@ -200,7 +200,7 @@ func (r *repeaterTab) buildTabItem(t store.RepeaterTab) *container.TabItem {
 		// grab first line e.g. "POST /new/path HTTP/1.1"
 		firstLine := strings.SplitN(raw, "\n", 2)[0]
 		parts := strings.Fields(firstLine)
-		name := t.Name // fallback
+		name := tab.Name // fallback
 		if len(parts) >= 2 {
 			path := parts[1]
 			if len(path) > 20 {
@@ -230,7 +230,7 @@ func (r *repeaterTab) buildTabItem(t store.RepeaterTab) *container.TabItem {
 
 	content := container.NewBorder(toolbar, nil, nil, nil, split)
 
-	tabItem := container.NewTabItem(t.Name, content)
+	tabItem := container.NewTabItem(tab.Name, content)
 
 	r.sendFns[tabItem] = doSend
 	r.tabIDs[tabItem] = tabID
@@ -299,53 +299,53 @@ func sendRawRequest(host string, port int, useTLS bool, rawReq string) (string, 
 		return "", fmt.Errorf("write request: %w", err)
 	}
 
-	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	httpResp, err := http.ReadResponse(bufio.NewReader(conn), nil)
 	if err != nil {
 		return "", fmt.Errorf("read response: %w", err)
 	}
-	defer resp.Body.Close()
+	defer httpResp.Body.Close()
 
-	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	respBody = decompressRepeaterBody(resp.Header, respBody)
+	respBody, _ := io.ReadAll(io.LimitReader(httpResp.Body, 1<<20))
+	respBody = decompressRepeaterBody(httpResp.Header, respBody)
 	if len(respBody) > 64*1024 {
 		respBody = append(respBody[:64*1024], []byte("\n... truncated")...)
 	}
 
-	var sb strings.Builder
-	fmt.Fprintf(&sb, "HTTP/1.1 %d %s\r\n", resp.StatusCode, http.StatusText(resp.StatusCode))
-	for k, vv := range resp.Header {
-		for _, v := range vv {
-			fmt.Fprintf(&sb, "%s: %s\r\n", k, v)
+	var builder strings.Builder
+	fmt.Fprintf(&builder, "HTTP/1.1 %d %s\r\n", httpResp.StatusCode, http.StatusText(httpResp.StatusCode))
+	for headerKey, headerValues := range httpResp.Header {
+		for _, headerValue := range headerValues {
+			fmt.Fprintf(&builder, "%s: %s\r\n", headerKey, headerValue)
 		}
 	}
-	sb.WriteString("\r\n")
-	sb.Write(respBody)
-	return sb.String(), nil
+	builder.WriteString("\r\n")
+	builder.Write(respBody)
+	return builder.String(), nil
 }
 
 func decompressRepeaterBody(header http.Header, body []byte) []byte {
-	ce := strings.ToLower(header.Get("Content-Encoding"))
-	r := bytes.NewReader(body)
-	switch ce {
+	contentEncoding := strings.ToLower(header.Get("Content-Encoding"))
+	bodyReader := bytes.NewReader(body)
+	switch contentEncoding {
 	case "gzip":
-		gr, err := gzip.NewReader(r)
+		gzipReader, err := gzip.NewReader(bodyReader)
 		if err != nil {
 			return body
 		}
-		defer gr.Close()
-		out, err := io.ReadAll(gr)
+		defer gzipReader.Close()
+		out, err := io.ReadAll(gzipReader)
 		if err != nil {
 			return body
 		}
 		return out
 	case "deflate":
-		out, err := io.ReadAll(flate.NewReader(r))
+		out, err := io.ReadAll(flate.NewReader(bodyReader))
 		if err != nil {
 			return body
 		}
 		return out
 	case "br":
-		out, err := io.ReadAll(brotli.NewReader(r))
+		out, err := io.ReadAll(brotli.NewReader(bodyReader))
 		if err != nil {
 			return body
 		}
@@ -374,9 +374,9 @@ func parseHostFromRaw(raw string) (host string, port int, useTLS bool) {
 		line = strings.TrimSpace(line)
 		if strings.HasPrefix(strings.ToLower(line), "host:") {
 			hostVal := strings.TrimSpace(line[5:])
-			if h, p, err := net.SplitHostPort(hostVal); err == nil {
-				host = h
-				port, _ = strconv.Atoi(p)
+			if hostname, portStr, err := net.SplitHostPort(hostVal); err == nil {
+				host = hostname
+				port, _ = strconv.Atoi(portStr)
 				useTLS = port == 443
 			} else {
 				host = hostVal

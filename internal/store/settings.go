@@ -1,69 +1,74 @@
 package store
 
 import (
-	"fmt"
-	"strconv"
+	"encoding/json"
+	"os"
+	"path/filepath"
 )
 
-type ProxySettings struct {
-	Host    string
-	Port    int
-	Enabled bool
+var SettingsPathOverride string
+
+type Settings struct {
+	DarkTheme    bool   `json:"dark_theme"`
+	ProxyHost    string `json:"proxy_host"`
+	ProxyPort    int    `json:"proxy_port"`
+	ProxyEnabled bool   `json:"proxy_enabled"`
 }
 
-func DefaultProxySettings() ProxySettings {
-	return ProxySettings{
-		Host:    "127.0.0.1",
-		Port:    9090,
-		Enabled: true,
+func DefaultSettings() Settings {
+	return Settings{
+		DarkTheme:    true,
+		ProxyHost:    "127.0.0.1",
+		ProxyPort:    9090,
+		ProxyEnabled: true,
 	}
 }
-func (s *Store) GetMeta(key string) (string, error) {
-	var val string
-	err := s.write(func() error {
-		return s.db.QueryRow(`SELECT value FROM meta WHERE key = ?`, key).Scan(&val)
-	})
-	return val, err
+
+func settingsPath() (string, error) {
+	if SettingsPathOverride != "" {
+		return SettingsPathOverride, nil
+	}
+	configDir, err := os.UserConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(configDir, "shiv", "settings.json"), nil
 }
 
-func (s *Store) SetMeta(key, value string) error {
-	return s.write(func() error {
-		_, err := s.db.Exec(`INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, key, value)
-		if err != nil {
-			return fmt.Errorf("store: set meta %s: %w", key, err)
-		}
-		return nil
-	})
+func LoadSettings() Settings {
+	defaultSettings := DefaultSettings()
+
+	path, err := settingsPath()
+	if err != nil {
+		return defaultSettings
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return defaultSettings
+	}
+
+	if err := json.Unmarshal(data, &defaultSettings); err != nil {
+		return defaultSettings
+	}
+
+	return defaultSettings
 }
 
-func (s *Store) LoadProxySettings() ProxySettings {
-	def := DefaultProxySettings()
-
-	if host, err := s.GetMeta("proxy.host"); err == nil {
-		def.Host = host
-	}
-	if portStr, err := s.GetMeta("proxy.port"); err == nil {
-		if port, err := strconv.Atoi(portStr); err == nil {
-			def.Port = port
-		}
-	}
-	if enabledStr, err := s.GetMeta("proxy.enabled"); err == nil {
-		def.Enabled = enabledStr == "true"
-	}
-
-	return def
-}
-
-func (s *Store) SaveProxySettings(ps ProxySettings) error {
-	if err := s.SetMeta("proxy.host", ps.Host); err != nil {
+func SaveSettings(s Settings) error {
+	path, err := settingsPath()
+	if err != nil {
 		return err
 	}
-	if err := s.SetMeta("proxy.port", strconv.Itoa(ps.Port)); err != nil {
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	enabled := "false"
-	if ps.Enabled {
-		enabled = "true"
+
+	data, err := json.Marshal(s)
+	if err != nil {
+		return err
 	}
-	return s.SetMeta("proxy.enabled", enabled)
+
+	return os.WriteFile(path, data, 0o644)
 }

@@ -19,15 +19,15 @@ func newReadOnlyEntry() *readOnlyEntry {
 }
 
 func (e *readOnlyEntry) TypedRune(_ rune) {}
-func (e *readOnlyEntry) TypedKey(ev *fyne.KeyEvent) {
-	switch ev.Name {
+func (e *readOnlyEntry) TypedKey(keyEvent *fyne.KeyEvent) {
+	switch keyEvent.Name {
 	case fyne.KeyUp, fyne.KeyDown, fyne.KeyLeft, fyne.KeyRight,
 		fyne.KeyHome, fyne.KeyEnd, fyne.KeyPageUp, fyne.KeyPageDown:
-		e.Entry.TypedKey(ev)
+		e.Entry.TypedKey(keyEvent)
 	}
 }
-func (e *readOnlyEntry) TypedShortcut(s fyne.Shortcut) {
-	if _, ok := s.(*fyne.ShortcutCopy); ok {
-		e.Entry.TypedShortcut(s)
+func (e *readOnlyEntry) TypedShortcut(shortcut fyne.Shortcut) {
+	if _, ok := shortcut.(*fyne.ShortcutCopy); ok {
+		e.Entry.TypedShortcut(shortcut)
 	}
 }

@@ -14,8 +14,8 @@ import (
 	"github.com/shiv/internal/store"
 )
 
-func showScopeDialog(st *store.Store, win fyne.Window) {
-	entries, err := st.AllScopeEntries()
+func showScopeDialog(projectStore *store.Store, win fyne.Window) {
+	entries, err := projectStore.AllScopeEntries()
 	if err != nil {
 		logger.Error("scope: load entries: %v", err)
 		entries = nil
@@ -27,8 +27,8 @@ func showScopeDialog(st *store.Store, win fyne.Window) {
 		host string
 	}
 	rows := make([]row, len(entries))
-	for i, e := range entries {
-		rows[i] = row{e.ID, e.Host}
+	for i, entry := range entries {
+		rows[i] = row{entry.ID, entry.Host}
 	}
 
 	var list *widget.List
@@ -69,17 +69,17 @@ func showScopeDialog(st *store.Store, win fyne.Window) {
 			host = host[:idx]
 		}
 		// strip port, avoid breaking ipv6
-		if h, _, err := net.SplitHostPort(host); err == nil {
-			host = h
+		if hostname, _, err := net.SplitHostPort(host); err == nil {
+			host = hostname
 		}
-		if err := st.AddScopeEntry(host); err != nil {
+		if err := projectStore.AddScopeEntry(host); err != nil {
 			logger.Error("scope: add entry: %v", err)
 			return
 		}
-		newEntries, _ := st.AllScopeEntries()
+		newEntries, _ := projectStore.AllScopeEntries()
 		rows = make([]row, len(newEntries))
-		for i, e := range newEntries {
-			rows[i] = row{e.ID, e.Host}
+		for i, entry := range newEntries {
+			rows[i] = row{entry.ID, entry.Host}
 		}
 		hostEntry.SetText("")
 		list.Refresh()
@@ -90,12 +90,12 @@ func showScopeDialog(st *store.Store, win fyne.Window) {
 		if selectedIdx < 0 || selectedIdx >= len(rows) {
 			return
 		}
-		id := rows[selectedIdx].id
-		if err := st.DeleteScopeEntry(id); err != nil {
+		entryId := rows[selectedIdx].id
+		if err := projectStore.DeleteScopeEntry(entryId); err != nil {
 			logger.Error("scope: delete entry: %v", err)
 			return
 		}
-		newEntries, _ := st.AllScopeEntries()
+		newEntries, _ := projectStore.AllScopeEntries()
 		rows = make([]row, len(newEntries))
 		for i, e := range newEntries {
 			rows[i] = row{e.ID, e.Host}
@@ -116,7 +116,7 @@ func showScopeDialog(st *store.Store, win fyne.Window) {
 	)
 	content.Resize(fyne.NewSize(400, 300))
 
-	d := dialog.NewCustom("Scope", "Close", content, win)
-	d.Resize(fyne.NewSize(400, 350))
-	d.Show()
+	scopeDialog := dialog.NewCustom("Scope", "Close", content, win)
+	scopeDialog.Resize(fyne.NewSize(400, 350))
+	scopeDialog.Show()
 }

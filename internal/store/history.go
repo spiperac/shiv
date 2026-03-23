@@ -25,32 +25,32 @@ type Transaction struct {
 }
 
 func (s *Store) GetTransaction(id uint64) (*Transaction, error) {
-	var tx Transaction
-	var ts, reqH, respH string
-	var tlsInt, scopeInt int
+	var transaction Transaction
+	var timestampStr, reqHeaders, respHeaders string
+	var tlsFlag, scopeFlag int
 	err := s.db.QueryRow(`
 		SELECT id, timestamp, host, method, url,
 		       req_headers, req_body, status_code, resp_headers,
 		       resp_body, duration_ms, tls, in_scope
 		FROM history WHERE id = ?`, id,
 	).Scan(
-		&tx.ID, &ts, &tx.Host, &tx.Method, &tx.URL,
-		&reqH, &tx.ReqBody, &tx.StatusCode, &respH,
-		&tx.RespBody, &tx.DurationMs, &tlsInt, &scopeInt,
+		&transaction.ID, &timestampStr, &transaction.Host, &transaction.Method, &transaction.URL,
+		&reqHeaders, &transaction.ReqBody, &transaction.StatusCode, &respHeaders,
+		&transaction.RespBody, &transaction.DurationMs, &tlsFlag, &scopeFlag,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("store: get transaction %d: %w", id, err)
 	}
-	tx.Timestamp, _ = time.Parse(time.RFC3339, ts)
-	tx.TLS = tlsInt == 1
-	tx.InScope = scopeInt == 1
-	if err := json.Unmarshal([]byte(reqH), &tx.ReqHeaders); err != nil {
-		tx.ReqHeaders = http.Header{}
+	transaction.Timestamp, _ = time.Parse(time.RFC3339, timestampStr)
+	transaction.TLS = tlsFlag == 1
+	transaction.InScope = scopeFlag == 1
+	if err := json.Unmarshal([]byte(reqHeaders), &transaction.ReqHeaders); err != nil {
+		transaction.ReqHeaders = http.Header{}
 	}
-	if err := json.Unmarshal([]byte(respH), &tx.RespHeaders); err != nil {
-		tx.RespHeaders = http.Header{}
+	if err := json.Unmarshal([]byte(respHeaders), &transaction.RespHeaders); err != nil {
+		transaction.RespHeaders = http.Header{}
 	}
-	return &tx, nil
+	return &transaction, nil
 }
 
 // Log writes a completed transaction to the history table and pushes it to Updates.
@@ -66,7 +66,7 @@ func (s *Store) Log(t Transaction) error {
 
 	if err == nil {
 		return s.write(func() error {
-			_, err = s.db.Exec(`UPDATE history SET timestamp = ? WHERE id = ?`,
+			_, err := s.db.Exec(`UPDATE history SET timestamp = ? WHERE id = ?`,
 				t.Timestamp.UTC().Format(time.RFC3339), existingID)
 			if err != nil {
 				return fmt.Errorf("store: update timestamp: %w", err)

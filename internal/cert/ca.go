@@ -47,11 +47,11 @@ func (ca *CA) Fresh() bool {
 // Dir returns the directory where Shiv stores the CA files.
 // Uses os.UserConfigDir()/shiv — created if it does not exist.
 func Dir() (string, error) {
-	base, err := os.UserConfigDir()
+	configDir, err := os.UserConfigDir()
 	if err != nil {
 		return "", fmt.Errorf("cert: cannot find user config dir: %w", err)
 	}
-	dir := filepath.Join(base, "shiv")
+	dir := filepath.Join(configDir, "shiv")
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return "", fmt.Errorf("cert: cannot create config dir %s: %w", dir, err)
 	}
@@ -114,8 +114,8 @@ func (ca *CA) TLSCertForHost(host string) (*tls.Certificate, error) {
 		hostname = h
 	}
 
-	if v, ok := ca.cache.Load(hostname); ok {
-		return v.(*tls.Certificate), nil
+	if cachedCert, ok := ca.cache.Load(hostname); ok {
+		return cachedCert.(*tls.Certificate), nil
 	}
 
 	tlsCert, err := ca.generateHostCert(hostname)
@@ -139,7 +139,7 @@ func (ca *CA) X509Cert() *x509.Certificate {
 // ---------------------------------------------------------------------
 
 func generate(keyPath, crtPath string) (*CA, error) {
-	key, err := rsa.GenerateKey(rand.Reader, caKeySize)
+	caKey, err := rsa.GenerateKey(rand.Reader, caKeySize)
 	if err != nil {
 		return nil, fmt.Errorf("cert: CA key generation failed: %w", err)
 	}
@@ -163,18 +163,18 @@ func generate(keyPath, crtPath string) (*CA, error) {
 		MaxPathLen:            1,
 	}
 
-	derBytes, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	derBytes, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &caKey.PublicKey, caKey)
 	if err != nil {
 		return nil, fmt.Errorf("cert: CA cert creation failed: %w", err)
 	}
 
-	parsed, err := x509.ParseCertificate(derBytes)
+	parsedCert, err := x509.ParseCertificate(derBytes)
 	if err != nil {
 		return nil, fmt.Errorf("cert: CA cert parse failed: %w", err)
 	}
 
 	// Persist key.
-	if err := writePEM(keyPath, "RSA PRIVATE KEY", x509.MarshalPKCS1PrivateKey(key), 0600); err != nil {
+	if err := writePEM(keyPath, "RSA PRIVATE KEY", x509.MarshalPKCS1PrivateKey(caKey), 0600); err != nil {
 		return nil, err
 	}
 	// Persist cert.
@@ -182,7 +182,7 @@ func generate(keyPath, crtPath string) (*CA, error) {
 		return nil, err
 	}
 
-	return &CA{cert: parsed, key: key, fresh: true}, nil
+	return &CA{cert: parsedCert, key: caKey, fresh: true}, nil
 }
 
 func loadFromDisk(keyPath, crtPath string) (*CA, error) {
@@ -199,21 +199,21 @@ func loadFromDisk(keyPath, crtPath string) (*CA, error) {
 	if keyBlock == nil {
 		return nil, errors.New("cert: CA key PEM decode failed")
 	}
-	key, err := x509.ParsePKCS1PrivateKey(keyBlock.Bytes)
+	caKey, err := x509.ParsePKCS1PrivateKey(keyBlock.Bytes)
 	if err != nil {
 		return nil, fmt.Errorf("cert: CA key parse: %w", err)
 	}
 
-	crtBlock, _ := pem.Decode(crtPEM)
-	if crtBlock == nil {
+	certBlock, _ := pem.Decode(crtPEM)
+	if certBlock == nil {
 		return nil, errors.New("cert: CA cert PEM decode failed")
 	}
-	parsed, err := x509.ParseCertificate(crtBlock.Bytes)
+	parsedCert, err := x509.ParseCertificate(certBlock.Bytes)
 	if err != nil {
 		return nil, fmt.Errorf("cert: CA cert parse: %w", err)
 	}
 
-	return &CA{cert: parsed, key: key}, nil
+	return &CA{cert: parsedCert, key: caKey}, nil
 }
 
 func (ca *CA) generateHostCert(hostname string) (*tls.Certificate, error) {
@@ -227,7 +227,7 @@ func (ca *CA) generateHostCert(hostname string) (*tls.Certificate, error) {
 		return nil, err
 	}
 
-	tmpl := &x509.Certificate{
+	certTemplate := &x509.Certificate{
 		SerialNumber: serial,
 		Subject: pkix.Name{
 			CommonName: hostname,
@@ -242,12 +242,12 @@ func (ca *CA) generateHostCert(hostname string) (*tls.Certificate, error) {
 
 	// Support both IP addresses and DNS names.
 	if ip := net.ParseIP(hostname); ip != nil {
-		tmpl.IPAddresses = []net.IP{ip}
+		certTemplate.IPAddresses = []net.IP{ip}
 	} else {
-		tmpl.DNSNames = []string{hostname}
+		certTemplate.DNSNames = []string{hostname}
 	}
 
-	derBytes, err := x509.CreateCertificate(rand.Reader, tmpl, ca.cert, &key.PublicKey, ca.key)
+	derBytes, err := x509.CreateCertificate(rand.Reader, certTemplate, ca.cert, &key.PublicKey, ca.key)
 	if err != nil {
 		return nil, fmt.Errorf("cert: host cert creation failed for %s: %w", hostname, err)
 	}
@@ -276,12 +276,12 @@ func randomSerial() (*big.Int, error) {
 }
 
 func writePEM(path, pemType string, derBytes []byte, mode os.FileMode) error {
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, mode)
+	pemFile, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, mode)
 	if err != nil {
 		return fmt.Errorf("cert: open %s for write: %w", path, err)
 	}
-	defer f.Close()
-	return pem.Encode(f, &pem.Block{Type: pemType, Bytes: derBytes})
+	defer pemFile.Close()
+	return pem.Encode(pemFile, &pem.Block{Type: pemType, Bytes: derBytes})
 }
 
 func encodeCertPEM(derBytes []byte) []byte {

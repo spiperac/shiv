@@ -16,8 +16,8 @@ import (
 )
 
 type interceptTab struct {
-	st      *store.Store
-	pending *store.PendingRequest
+	projectStore *store.Store
+	pending      *store.PendingRequest
 
 	toggle  *widget.Check
 	editor  *widget.Entry
@@ -26,13 +26,13 @@ type interceptTab struct {
 }
 
 func newInterceptTab(st *store.Store) fyne.CanvasObject {
-	t := &interceptTab{st: st}
+	t := &interceptTab{projectStore: st}
 	return t.build()
 }
 
 func (t *interceptTab) build() fyne.CanvasObject {
 	t.toggle = widget.NewCheck("Intercept ON", func(on bool) {
-		t.st.Intercept.SetEnabled(on)
+		t.projectStore.Intercept.SetEnabled(on)
 		if !on {
 			// If a request is waiting on Reply, forward it unmodified.
 			// Without this the proxy goroutine blocks forever.
@@ -76,10 +76,10 @@ func (t *interceptTab) build() fyne.CanvasObject {
 }
 
 func (t *interceptTab) watchQueue() {
-	for pending := range t.st.Intercept.Queue() {
-		p := pending
+	for pending := range t.projectStore.Intercept.Queue() {
+		pendingRequest := pending
 		fyne.Do(func() {
-			t.showRequest(p)
+			t.showRequest(pendingRequest)
 		})
 	}
 }
@@ -96,21 +96,21 @@ func (t *interceptTab) decide(forward bool) {
 	if t.pending == nil {
 		return
 	}
-	p := t.pending
+	pendingRequest := t.pending
 	rawText := t.editor.Text // capture BEFORE clearing
 	t.pending = nil
 	t.clearEditor()
 
 	if forward {
-		req, body, err := parseRawRequest(rawText, p.Request)
+		req, body, err := parseRawRequest(rawText, pendingRequest.Request)
 		if err != nil {
 			logger.Error("intercept: parse edited request: %v — forwarding original", err)
-			req = p.Request
-			body = p.Body
+			req = pendingRequest.Request
+			body = pendingRequest.Body
 		}
-		p.Reply <- store.Decision{Forward: true, Request: req, Body: body}
+		pendingRequest.Reply <- store.Decision{Forward: true, Request: req, Body: body}
 	} else {
-		p.Reply <- store.Decision{Forward: false}
+		pendingRequest.Reply <- store.Decision{Forward: false}
 	}
 }
 
@@ -122,23 +122,23 @@ func (t *interceptTab) clearEditor() {
 }
 
 func formatRawRequest(req *http.Request, body []byte) string {
-	var sb bytes.Buffer
+	var builder bytes.Buffer
 	path := req.URL.RequestURI()
 	if path == "" {
 		path = "/"
 	}
-	fmt.Fprintf(&sb, "%s %s HTTP/1.1\r\n", req.Method, path)
-	fmt.Fprintf(&sb, "Host: %s\r\n", req.Host)
-	for k, vv := range req.Header {
-		for _, v := range vv {
-			fmt.Fprintf(&sb, "%s: %s\r\n", k, v)
+	fmt.Fprintf(&builder, "%s %s HTTP/1.1\r\n", req.Method, path)
+	fmt.Fprintf(&builder, "Host: %s\r\n", req.Host)
+	for headerKey, headerValues := range req.Header {
+		for _, headerValue := range headerValues {
+			fmt.Fprintf(&builder, "%s: %s\r\n", headerKey, headerValue)
 		}
 	}
-	sb.WriteString("\r\n")
+	builder.WriteString("\r\n")
 	if len(body) > 0 {
-		sb.Write(body)
+		builder.Write(body)
 	}
-	return sb.String()
+	return builder.String()
 }
 
 func parseRawRequest(raw string, original *http.Request) (*http.Request, []byte, error) {

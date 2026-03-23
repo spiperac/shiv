@@ -13,8 +13,8 @@ import (
 var verbose bool
 
 // Init configures the logger. Call once at startup.
-func Init(v bool) {
-	verbose = v
+func Init(isVerbose bool) {
+	verbose = isVerbose
 }
 
 // Always logs a message that is always shown regardless of verbose flag.
@@ -43,7 +43,7 @@ func Debug(format string, args ...any) {
 }
 
 func log(w io.Writer, level, format string, args ...any) {
-	ts := time.Now().Format("15:04:05.000")
+	timestamp := time.Now().Format("15:04:05.000")
 	msg := fmt.Sprintf(format, args...)
-	fmt.Fprintf(w, "[shiv] %s %s %s\n", ts, level, msg)
+	fmt.Fprintf(w, "[shiv] %s %s %s\n", timestamp, level, msg)
 }

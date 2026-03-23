@@ -33,18 +33,18 @@ func (s *Store) AllLoot() ([]LootEntry, error) {
 
 	var entries []LootEntry
 	for rows.Next() {
-		var e LootEntry
+		var entry LootEntry
 		var histID *int64
-		var ts string
-		if err := rows.Scan(&e.ID, &e.Title, &e.Severity, &e.Notes, &histID, &ts); err != nil {
+		var timestampStr string
+		if err := rows.Scan(&entry.ID, &entry.Title, &entry.Severity, &entry.Notes, &histID, &timestampStr); err != nil {
 			return nil, fmt.Errorf("store: scan loot: %w", err)
 		}
 		if histID != nil {
-			id := uint64(*histID)
-			e.HistoryID = &id
+			histIDUint := uint64(*histID)
+			entry.HistoryID = &histIDUint
 		}
-		e.CreatedAt, _ = time.Parse(time.RFC3339, ts)
-		entries = append(entries, e)
+		entry.CreatedAt, _ = time.Parse(time.RFC3339, timestampStr)
+		entries = append(entries, entry)
 	}
 	return entries, rows.Err()
 }
@@ -52,7 +52,7 @@ func (s *Store) AllLoot() ([]LootEntry, error) {
 func (s *Store) AddLoot(e LootEntry) (int64, error) {
 	var id int64
 	err := s.write(func() error {
-		var histID interface{}
+		var histID any
 		if e.HistoryID != nil {
 			histID = *e.HistoryID
 		}

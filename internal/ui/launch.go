@@ -26,10 +26,10 @@ type RecentProject struct {
 }
 
 func ShowLaunchScreen(app fyne.App, onSelect func(projectPath string, w fyne.Window)) {
-	w := app.NewWindow("Shiv")
-	w.Resize(fyne.NewSize(560, 420))
-	w.CenterOnScreen()
-	w.SetFixedSize(true)
+	launchWin := app.NewWindow("Shiv")
+	launchWin.Resize(fyne.NewSize(560, 420))
+	launchWin.CenterOnScreen()
+	launchWin.SetFixedSize(true)
 	var list *widget.List
 	var onDeleteBtn func(widget.ListItemID)
 
@@ -67,41 +67,41 @@ func ShowLaunchScreen(app fyne.App, onSelect func(projectPath string, w fyne.Win
 	list.OnSelected = func(i widget.ListItemID) {
 		path := recents[i].Path
 		if _, err := os.Stat(path); err != nil {
-			dialog.ShowError(err, w)
+			dialog.ShowError(err, launchWin)
 			list.UnselectAll()
 			return
 		}
 		saveRecent(path)
-		onSelect(path, w)
+		onSelect(path, launchWin)
 	}
 
 	newBtn := widget.NewButtonWithIcon("New Project", theme.DocumentCreateIcon(), func() {
-		d := dialog.NewFileSave(func(uc fyne.URIWriteCloser, err error) {
-			if err != nil || uc == nil {
+		saveDialog := dialog.NewFileSave(func(writeCloser fyne.URIWriteCloser, err error) {
+			if err != nil || writeCloser == nil {
 				return
 			}
-			uc.Close()
-			path := uc.URI().Path()
+			writeCloser.Close()
+			path := writeCloser.URI().Path()
 			saveRecent(path)
-			onSelect(path, w)
-		}, w)
-		d.SetFileName("untitled.shiv")
-		d.SetFilter(storage.NewExtensionFileFilter([]string{".shiv"}))
-		d.Show()
+			onSelect(path, launchWin)
+		}, launchWin)
+		saveDialog.SetFileName("untitled.shiv")
+		saveDialog.SetFilter(storage.NewExtensionFileFilter([]string{".shiv"}))
+		saveDialog.Show()
 	})
 
 	openBtn := widget.NewButtonWithIcon("Open Project", theme.FolderOpenIcon(), func() {
-		d := dialog.NewFileOpen(func(uc fyne.URIReadCloser, err error) {
-			if err != nil || uc == nil {
+		openDialog := dialog.NewFileOpen(func(readCloser fyne.URIReadCloser, err error) {
+			if err != nil || readCloser == nil {
 				return
 			}
-			uc.Close()
-			path := uc.URI().Path()
+			readCloser.Close()
+			path := readCloser.URI().Path()
 			saveRecent(path)
-			onSelect(path, w)
-		}, w)
-		d.SetFilter(storage.NewExtensionFileFilter([]string{".shiv"}))
-		d.Show()
+			onSelect(path, launchWin)
+		}, launchWin)
+		openDialog.SetFilter(storage.NewExtensionFileFilter([]string{".shiv"}))
+		openDialog.Show()
 	})
 	newBtn.Importance = widget.HighImportance
 
@@ -142,16 +142,16 @@ func ShowLaunchScreen(app fyne.App, onSelect func(projectPath string, w fyne.Win
 		)
 	}
 
-	w.SetContent(container.NewPadded(content))
-	w.Show()
+	launchWin.SetContent(container.NewPadded(content))
+	launchWin.Show()
 }
 
 func recentsPath() (string, error) {
-	base, err := os.UserConfigDir()
+	configDir, err := os.UserConfigDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(base, "shiv", "recent_projects.json"), nil
+	return filepath.Join(configDir, "shiv", "recent_projects.json"), nil
 }
 
 func loadRecents() ([]RecentProject, error) {
@@ -174,9 +174,9 @@ func saveRecent(projectPath string) {
 	recents, _ := loadRecents()
 
 	filtered := recents[:0]
-	for _, r := range recents {
-		if r.Path != projectPath {
-			filtered = append(filtered, r)
+	for _, recent := range recents {
+		if recent.Path != projectPath {
+			filtered = append(filtered, recent)
 		}
 	}
 

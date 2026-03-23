@@ -30,30 +30,30 @@ func (s *Store) AllRepeaterTabs() ([]RepeaterTab, error) {
 
 	var tabs []RepeaterTab
 	for rows.Next() {
-		var t RepeaterTab
-		var tlsInt int
-		if err := rows.Scan(&t.ID, &t.Name, &t.Host, &t.Port, &tlsInt, &t.RawRequest, &t.LastResponse, &t.Position); err != nil {
+		var tab RepeaterTab
+		var tlsFlag int
+		if err := rows.Scan(&tab.ID, &tab.Name, &tab.Host, &tab.Port, &tlsFlag, &tab.RawRequest, &tab.LastResponse, &tab.Position); err != nil {
 			return nil, fmt.Errorf("store: scan repeater tab: %w", err)
 		}
-		t.TLS = tlsInt == 1
-		tabs = append(tabs, t)
+		tab.TLS = tlsFlag == 1
+		tabs = append(tabs, tab)
 	}
 	return tabs, rows.Err()
 }
 
 // SaveRepeaterTab inserts a new repeater tab and returns its ID.
-func (s *Store) SaveRepeaterTab(t RepeaterTab) (int64, error) {
+func (s *Store) SaveRepeaterTab(tab RepeaterTab) (int64, error) {
 	var id int64
 	err := s.write(func() error {
-		res, err := s.db.Exec(`
+		result, err := s.db.Exec(`
 			INSERT INTO repeater_tabs (name, host, port, tls, raw_request, last_response, position)
 			VALUES (?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(position), 0) + 1 FROM repeater_tabs))`,
-			t.Name, t.Host, t.Port, boolToInt(t.TLS), t.RawRequest, t.LastResponse,
+			tab.Name, tab.Host, tab.Port, boolToInt(tab.TLS), tab.RawRequest, tab.LastResponse,
 		)
 		if err != nil {
 			return fmt.Errorf("store: save repeater tab: %w", err)
 		}
-		id, err = res.LastInsertId()
+		id, err = result.LastInsertId()
 		return err
 	})
 	return id, err
@@ -97,18 +97,18 @@ func (s *Store) DeleteRepeaterTab(id int64) error {
 
 // repeaterTabExists checks if a tab with the given host+port+request already exists.
 func (s *Store) repeaterTabByID(id int64) (*RepeaterTab, error) {
-	var t RepeaterTab
-	var tlsInt int
+	var tab RepeaterTab
+	var tlsFlag int
 	err := s.db.QueryRow(`
 		SELECT id, name, host, port, tls, raw_request, COALESCE(last_response, ''), position
 		FROM repeater_tabs WHERE id = ?`, id,
-	).Scan(&t.ID, &t.Name, &t.Host, &t.Port, &tlsInt, &t.RawRequest, &t.LastResponse, &t.Position)
+	).Scan(&tab.ID, &tab.Name, &tab.Host, &tab.Port, &tlsFlag, &tab.RawRequest, &tab.LastResponse, &tab.Position)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	t.TLS = tlsInt == 1
-	return &t, nil
+	tab.TLS = tlsFlag == 1
+	return &tab, nil
 }

@@ -13,21 +13,22 @@ import (
 	"github.com/shiv/internal/store"
 )
 
-func ShowMainWindow(app fyne.App, st *store.Store, p *proxy.Proxy, ps store.ProxySettings, launchWin fyne.Window) {
-	w := app.NewWindow("Shiv")
-	w.Resize(fyne.NewSize(1280, 800))
-	w.SetMaster()
-
-	dark := true
+func ShowMainWindow(app fyne.App, projectStore *store.Store, proxyServer *proxy.Proxy, settings store.Settings, launchWin fyne.Window) {
+	mainWin := app.NewWindow("Shiv")
+	mainWin.Resize(fyne.NewSize(1280, 800))
+	mainWin.SetMaster()
 
 	toggleBtn := widget.NewButtonWithIcon("", theme.ColorChromaticIcon(), nil)
+	isDark := settings.DarkTheme
 	toggleBtn.OnTapped = func() {
-		dark = !dark
-		app.Settings().SetTheme(NewVagueTheme(dark))
+		isDark = !isDark
+		app.Settings().SetTheme(NewVagueTheme(isDark))
+		current := store.LoadSettings()
+		current.DarkTheme = isDark
+		store.SaveSettings(current)
 	}
-
 	settingsBtn := widget.NewButtonWithIcon("", AppIcon("settings"), func() {
-		showSettingsDialog(app, w, st, p)
+		showSettingsDialog(app, mainWin, proxyServer)
 	})
 	logo := canvas.NewImageFromResource(fyne.NewStaticResource("logo.png", assets.Logo))
 	logo.FillMode = canvas.ImageFillContain
@@ -42,10 +43,10 @@ func ShowMainWindow(app fyne.App, st *store.Store, p *proxy.Proxy, ps store.Prox
 		layout.NewSpacer(),
 	)
 
-	repeater := newRepeaterTab(st, w)
-	loot := &lootTab{st: st, win: w, repeater: repeater, selectedIdx: -1}
-	historyTab := newHistoryTab(st, w, repeater, loot)
-	interceptTab := newInterceptTab(st)
+	repeater := newRepeaterTab(projectStore, mainWin)
+	loot := &lootTab{projectStore: projectStore, win: mainWin, repeater: repeater, selectedIdx: -1}
+	historyTab := newHistoryTab(projectStore, mainWin, repeater, loot)
+	interceptTab := newInterceptTab(projectStore)
 	lootContent := loot.build()
 
 	tabs := container.NewAppTabs(
@@ -56,7 +57,7 @@ func ShowMainWindow(app fyne.App, st *store.Store, p *proxy.Proxy, ps store.Prox
 	)
 	tabs.SetTabLocation(container.TabLocationTop)
 
-	w.SetContent(container.NewBorder(functionBar, nil, nil, nil, tabs))
-	w.Show()
+	mainWin.SetContent(container.NewBorder(functionBar, nil, nil, nil, tabs))
+	mainWin.Show()
 	launchWin.Close()
 }

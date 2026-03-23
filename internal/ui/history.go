@@ -21,10 +21,10 @@ import (
 )
 
 type historyTab struct {
-	st       *store.Store
-	win      fyne.Window
-	repeater *repeaterTab
-	loot     *lootTab
+	projectStore *store.Store
+	win          fyne.Window
+	repeater     *repeaterTab
+	loot         *lootTab
 
 	mu       sync.RWMutex
 	rows     []store.Transaction
@@ -48,7 +48,7 @@ var tableColumns = []string{"Method", "Host", "Path", "Status", "Size", "Duratio
 var columnWidths = []float32{80, 200, 300, 70, 90, 90}
 
 func newHistoryTab(st *store.Store, win fyne.Window, repeater *repeaterTab, loot *lootTab) fyne.CanvasObject {
-	h := &historyTab{st: st, win: win, repeater: repeater, loot: loot}
+	h := &historyTab{projectStore: st, win: win, repeater: repeater, loot: loot}
 	return h.build()
 }
 func (h *historyTab) build() fyne.CanvasObject {
@@ -60,7 +60,7 @@ func (h *historyTab) build() fyne.CanvasObject {
 	h.showOutScope.Checked = true
 
 	h.scopeBtn = widget.NewButtonWithIcon("Scope", AppIcon("scope"), func() {
-		showScopeDialog(h.st, h.win)
+		showScopeDialog(h.projectStore, h.win)
 	})
 
 	filterBar := container.NewBorder(nil, nil, nil,
@@ -75,33 +75,33 @@ func (h *historyTab) build() fyne.CanvasObject {
 			return len(h.filtered) + 1, len(tableColumns)
 		},
 		func() fyne.CanvasObject {
-			l := widget.NewLabel("")
-			l.Truncation = fyne.TextTruncateEllipsis
-			return l
+			label := widget.NewLabel("")
+			label.Truncation = fyne.TextTruncateEllipsis
+			return label
 		},
 		func(id widget.TableCellID, obj fyne.CanvasObject) {
-			l := obj.(*widget.Label)
+			label := obj.(*widget.Label)
 			if id.Row == 0 {
-				l.TextStyle = fyne.TextStyle{Bold: true}
-				l.SetText(tableColumns[id.Col])
+				label.TextStyle = fyne.TextStyle{Bold: true}
+				label.SetText(tableColumns[id.Col])
 				return
 			}
-			l.TextStyle = fyne.TextStyle{}
+			label.TextStyle = fyne.TextStyle{}
 			h.mu.RLock()
 			idx := id.Row - 1
 			if idx >= len(h.filtered) {
 				h.mu.RUnlock()
-				l.SetText("")
+				label.SetText("")
 				return
 			}
 			tx := h.filtered[idx]
 			h.mu.RUnlock()
-			l.SetText(h.cellText(tx, id.Col))
+			label.SetText(h.cellText(tx, id.Col))
 		},
 	)
 
-	for i, w := range columnWidths {
-		h.table.SetColumnWidth(i, w)
+	for i, colWidth := range columnWidths {
+		h.table.SetColumnWidth(i, colWidth)
 	}
 
 	h.table.OnSelected = func(id widget.TableCellID) {
@@ -124,14 +124,14 @@ func (h *historyTab) build() fyne.CanvasObject {
 		h.sendLoot.Enable()
 
 		go func() {
-			full, err := h.st.GetTransaction(tx.ID)
+			fullTransaction, err := h.projectStore.GetTransaction(tx.ID)
 			if err != nil {
 				logger.Error("history: get transaction: %v", err)
 				return
 			}
 			fyne.Do(func() {
-				h.selectedTx = *full
-				h.showDetail(*full)
+				h.selectedTx = *fullTransaction
+				h.showDetail(*fullTransaction)
 			})
 		}()
 	}
@@ -194,7 +194,7 @@ func (h *historyTab) build() fyne.CanvasObject {
 	h.sendLoot.Disable()
 
 	clearBtn := widget.NewButtonWithIcon("Clear History", AppIcon("delete"), func() {
-		if err := h.st.ClearHistory(); err != nil {
+		if err := h.projectStore.ClearHistory(); err != nil {
 			logger.Error("clear history: %v", err)
 			return
 		}
@@ -226,7 +226,7 @@ func (h *historyTab) build() fyne.CanvasObject {
 
 	// Load existing rows from DB on startup.
 	go func() {
-		txs, err := h.st.AllTransactions()
+		txs, err := h.projectStore.AllTransactions()
 		if err != nil {
 			logger.Error("history: load transactions: %v", err)
 			return
@@ -304,17 +304,17 @@ func (h *historyTab) applyFilter() {
 // watchUpdates receives new transactions and schedules a filtered rebuild
 // on a short timer to avoid mutating filtered between cell clicks.
 func (h *historyTab) watchUpdates() {
-	for tx := range h.st.Updates {
-		t := tx
+	for tx := range h.projectStore.Updates {
+		transaction := tx
 		fyne.Do(func() {
 			h.mu.Lock()
 			newRows := make([]store.Transaction, 0, len(h.rows))
-			for _, r := range h.rows {
-				if r.ID != t.ID {
-					newRows = append(newRows, r)
+			for _, row := range h.rows {
+				if row.ID != transaction.ID {
+					newRows = append(newRows, row)
 				}
 			}
-			h.rows = append([]store.Transaction{t}, newRows...)
+			h.rows = append([]store.Transaction{transaction}, newRows...)
 			if len(h.rows) > 10000 {
 				h.rows = h.rows[:10000]
 			}
@@ -349,54 +349,54 @@ func prettyJSON(body []byte) []byte {
 }
 
 func formatRequest(tx store.Transaction) string {
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("%s %s HTTP/1.1\r\n", tx.Method, pathOf(tx.URL)))
-	sb.WriteString(fmt.Sprintf("Host: %s\r\n", tx.Host))
+	var builder strings.Builder
+	fmt.Fprintf(&builder, "%s %s HTTP/1.1\r\n", tx.Method, pathOf(tx.URL))
+	fmt.Fprintf(&builder, "Host: %s\r\n", tx.Host)
 	keys := make([]string, 0, len(tx.ReqHeaders))
 	for k := range tx.ReqHeaders {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
-	for _, k := range keys {
-		for _, v := range tx.ReqHeaders[k] {
-			sb.WriteString(fmt.Sprintf("%s: %s\r\n", k, v))
+	for _, headerKey := range keys {
+		for _, headerValue := range tx.ReqHeaders[headerKey] {
+			fmt.Fprintf(&builder, "%s: %s\r\n", headerKey, headerValue)
 		}
 	}
-	sb.WriteString("\r\n")
+	builder.WriteString("\r\n")
 	if len(tx.ReqBody) > 0 {
 		ct := tx.ReqHeaders.Get("Content-Type")
 		if strings.Contains(ct, "application/json") {
-			sb.Write(prettyJSON(tx.ReqBody))
+			builder.Write(prettyJSON(tx.ReqBody))
 		} else {
-			sb.WriteString(string(tx.ReqBody))
+			builder.WriteString(string(tx.ReqBody))
 		}
 	}
-	return sb.String()
+	return builder.String()
 }
 
 func formatResponse(tx store.Transaction) string {
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("HTTP/1.1 %d\r\n", tx.StatusCode))
+	var builder strings.Builder
+	fmt.Fprintf(&builder, "HTTP/1.1 %d\r\n", tx.StatusCode)
 	keys := make([]string, 0, len(tx.RespHeaders))
 	for k := range tx.RespHeaders {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
-	for _, k := range keys {
-		for _, v := range tx.RespHeaders[k] {
-			sb.WriteString(fmt.Sprintf("%s: %s\r\n", k, v))
+	for _, headerKey := range keys {
+		for _, headerValue := range tx.RespHeaders[headerKey] {
+			fmt.Fprintf(&builder, "%s: %s\r\n", headerKey, headerValue)
 		}
 	}
-	sb.WriteString("\r\n")
+	builder.WriteString("\r\n")
 	if len(tx.RespBody) > 0 {
 		ct := tx.RespHeaders.Get("Content-Type")
 		if strings.Contains(ct, "application/json") {
-			sb.Write(prettyJSON(tx.RespBody))
+			builder.Write(prettyJSON(tx.RespBody))
 		} else {
-			sb.WriteString(string(tx.RespBody))
+			builder.WriteString(string(tx.RespBody))
 		}
 	}
-	return sb.String()
+	return builder.String()
 }
 
 func newBoldLabel(text string) *widget.Label {

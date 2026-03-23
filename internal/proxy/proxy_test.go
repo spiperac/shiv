@@ -22,10 +22,10 @@ func newTestStore(t *testing.T) *store.Store {
 	require.NoError(t, err)
 	f.Close()
 	t.Cleanup(func() { os.Remove(f.Name()) })
-	st, err := store.Open(f.Name())
+	projectStore, err := store.Open(f.Name())
 	require.NoError(t, err)
-	t.Cleanup(func() { st.Close() })
-	return st
+	t.Cleanup(func() { projectStore.Close() })
+	return projectStore
 }
 
 // newTestProxy creates a Proxy and an upstream httptest.Server it can forward to.

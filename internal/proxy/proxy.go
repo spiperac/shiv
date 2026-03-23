@@ -15,9 +15,9 @@ import (
 )
 
 type Proxy struct {
-	addr  string
-	ca    *cert.CA
-	store *store.Store
+	addr     string
+	certAuth *cert.CA
+	store    *store.Store
 
 	mu  sync.Mutex
 	srv *http.Server
@@ -25,16 +25,16 @@ type Proxy struct {
 
 const maxBodySize = 10 << 20 // 10 MB
 
-func New(addr string, st *store.Store) (*Proxy, error) {
+func New(addr string, projectStore *store.Store) (*Proxy, error) {
 	ca, err := cert.Load()
 	if err != nil {
 		return nil, fmt.Errorf("proxy: load CA: %w", err)
 	}
-	return &Proxy{addr: addr, ca: ca, store: st}, nil
+	return &Proxy{addr: addr, certAuth: ca, store: projectStore}, nil
 }
 
 func (p *Proxy) CA() *cert.CA {
-	return p.ca
+	return p.certAuth
 }
 
 func (p *Proxy) Start() error {
@@ -61,7 +61,9 @@ func (p *Proxy) Restart(newAddr string) error {
 	if srv != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		srv.Shutdown(ctx)
+		if err := srv.Shutdown(ctx); err != nil {
+			logger.Error("proxy: shutdown: %v", err)
+		}
 	}
 
 	p.mu.Lock()
@@ -84,7 +86,9 @@ func (p *Proxy) Stop() {
 	if srv != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		srv.Shutdown(ctx)
+		if err := srv.Shutdown(ctx); err != nil {
+			logger.Error("proxy: shutdown: %v", err)
+		}
 	}
 }
 
@@ -129,9 +133,9 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	elapsed := time.Since(start).Milliseconds()
 
 	stripResponseCacheHeaders(resp.Header)
-	for k, vv := range resp.Header {
-		for _, v := range vv {
-			w.Header().Add(k, v)
+	for headerKey, headerValues := range resp.Header {
+		for _, headerValue := range headerValues {
+			w.Header().Add(headerKey, headerValue)
 		}
 	}
 	w.WriteHeader(resp.StatusCode)

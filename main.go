@@ -22,37 +22,37 @@ func main() {
 
 	logger.Init(*verbose)
 
-	a := app.NewWithID("io.shiv.proxy")
-	a.SetIcon(fyne.NewStaticResource("logo.png", assets.Logo))
-	a.Settings().SetTheme(ui.NewVagueTheme(true))
+	fyneApp := app.NewWithID("io.shiv.proxy")
+	fyneApp.SetIcon(fyne.NewStaticResource("logo.png", assets.Logo))
+	settings := store.LoadSettings()
+	fyneApp.Settings().SetTheme(ui.NewVagueTheme(settings.DarkTheme))
 
-	ui.ShowLaunchScreen(a, func(projectPath string, launchWin fyne.Window) {
+	ui.ShowLaunchScreen(fyneApp, func(projectPath string, launchWin fyne.Window) {
 		if projectPath == "" {
-			a.Quit()
+			fyneApp.Quit()
 			return
 		}
 
-		st, err := store.Open(projectPath)
+		projectStore, err := store.Open(projectPath)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "[shiv] fatal: %v\n", err)
-			a.Quit()
+			fyneApp.Quit()
 			return
 		}
 
-		ps := st.LoadProxySettings()
-		addr := fmt.Sprintf("%s:%d", ps.Host, ps.Port)
+		proxyAddr := fmt.Sprintf("%s:%d", settings.ProxyHost, settings.ProxyPort)
 
-		p, err := proxy.New(addr, st)
+		proxyServer, err := proxy.New(proxyAddr, projectStore)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "[shiv] fatal: %v\n", err)
-			st.Close()
-			a.Quit()
+			projectStore.Close()
+			fyneApp.Quit()
 			return
 		}
 
-		if p.CA().Fresh() {
+		if proxyServer.CA().Fresh() {
 			go func() {
-				msg, err := p.CA().InstallCA()
+				msg, err := proxyServer.CA().InstallCA()
 				fyne.Do(func() {
 					if err != nil {
 						dialog.ShowError(fmt.Errorf("CA install failed — import it manually from your system config dir:\n%v", err), launchWin)
@@ -63,16 +63,16 @@ func main() {
 			}()
 		}
 
-		if ps.Enabled {
+		if settings.ProxyEnabled {
 			go func() {
-				if err := p.Start(); err != nil {
+				if err := proxyServer.Start(); err != nil {
 					logger.Error("proxy: %v", err)
 				}
 			}()
 		}
 
-		ui.ShowMainWindow(a, st, p, ps, launchWin)
+		ui.ShowMainWindow(fyneApp, projectStore, proxyServer, settings, launchWin)
 	})
 
-	a.Run()
+	fyneApp.Run()
 }

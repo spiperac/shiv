@@ -17,16 +17,16 @@ import (
 
 func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
-	if f, ok := w.(http.Flusher); ok {
-		f.Flush()
+	if flusher, ok := w.(http.Flusher); ok {
+		flusher.Flush()
 	}
 
-	hj, ok := w.(http.Hijacker)
+	hijacker, ok := w.(http.Hijacker)
 	if !ok {
 		logger.Error("mitm: server does not support hijacking")
 		return
 	}
-	clientConn, _, err := hj.Hijack()
+	clientConn, _, err := hijacker.Hijack()
 	if err != nil {
 		logger.Error("mitm: hijack: %v", err)
 		return
@@ -38,7 +38,7 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		bareHost = r.Host
 	}
 
-	tlsCert, err := p.ca.TLSCertForHost(bareHost)
+	tlsCert, err := p.certAuth.TLSCertForHost(bareHost)
 	if err != nil {
 		logger.Error("mitm: cert for %s: %v", bareHost, err)
 		return

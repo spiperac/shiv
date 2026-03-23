@@ -23,20 +23,20 @@ func Open(path string) (*Store, error) {
 	}
 	db.SetMaxOpenConns(1)
 
-	s := &Store{
+	projectStore := &Store{
 		db:        db,
 		writeCh:   make(chan func() error, 256),
 		done:      make(chan struct{}),
 		Updates:   make(chan Transaction, 256),
 		Intercept: NewInterceptGate(),
 	}
-	if err := s.migrate(); err != nil {
+	if err := projectStore.migrate(); err != nil {
 		db.Close()
 		return nil, err
 	}
 
-	go s.writeLoop()
-	return s, nil
+	go projectStore.writeLoop()
+	return projectStore, nil
 }
 
 func (s *Store) Close() error {
@@ -46,11 +46,11 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
-func (s *Store) write(fn func() error) error {
+func (s *Store) write(writeFunc func() error) error {
 	errCh := make(chan error, 1)
 	select {
 	case s.writeCh <- func() error {
-		err := fn()
+		err := writeFunc()
 		errCh <- err
 		return err
 	}:
@@ -68,8 +68,8 @@ func (s *Store) write(fn func() error) error {
 func (s *Store) writeLoop() {
 	for {
 		select {
-		case fn := <-s.writeCh:
-			fn()
+		case writeFunc := <-s.writeCh:
+			writeFunc()
 		case <-s.done:
 			// Drain remaining writes before exit.
 			for {
@@ -96,14 +96,6 @@ const schema = `
 CREATE TABLE IF NOT EXISTS meta (
 	key   TEXT PRIMARY KEY,
 	value TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS targets (
-	id       INTEGER PRIMARY KEY AUTOINCREMENT,
-	host     TEXT    NOT NULL,
-	port     INTEGER,
-	protocol TEXT    DEFAULT 'any',
-	in_scope INTEGER DEFAULT 1
 );
 
 CREATE TABLE IF NOT EXISTS history (

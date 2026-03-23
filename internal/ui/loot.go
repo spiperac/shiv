@@ -30,10 +30,10 @@ var severityColors = map[string]widget.Importance{
 }
 
 type lootTab struct {
-	st       *store.Store
-	win      fyne.Window
-	repeater *repeaterTab
-	entries  []store.LootEntry
+	projectStore *store.Store
+	win          fyne.Window
+	repeater     *repeaterTab
+	entries      []store.LootEntry
 
 	table      *widget.Table
 	notesArea  *readOnlyEntry
@@ -51,9 +51,9 @@ func (l *lootTab) build() fyne.CanvasObject {
 	l.table = widget.NewTable(
 		func() (int, int) { return len(l.entries) + 1, len(lootColumns) },
 		func() fyne.CanvasObject {
-			lb := widget.NewLabel("")
-			lb.Truncation = fyne.TextTruncateEllipsis
-			return lb
+			label := widget.NewLabel("")
+			label.Truncation = fyne.TextTruncateEllipsis
+			return label
 		},
 		func(id widget.TableCellID, obj fyne.CanvasObject) {
 			lb := obj.(*widget.Label)
@@ -83,8 +83,8 @@ func (l *lootTab) build() fyne.CanvasObject {
 			}
 		},
 	)
-	for i, w := range lootColumnWidths {
-		l.table.SetColumnWidth(i, w)
+	for i, colWidth := range lootColumnWidths {
+		l.table.SetColumnWidth(i, colWidth)
 	}
 
 	l.table.OnSelected = func(id widget.TableCellID) {
@@ -98,11 +98,11 @@ func (l *lootTab) build() fyne.CanvasObject {
 		}
 		l.selectedIdx = idx
 		l.deleteBtn.Enable()
-		e := l.entries[idx]
+		entry := l.entries[idx]
 		l.notesArea.SetText(fmt.Sprintf("Severity: %s\nCreated: %s\n\n%s",
-			e.Severity, e.CreatedAt.Format("2006-01-02 15:04"), e.Notes))
+			entry.Severity, entry.CreatedAt.Format("2006-01-02 15:04"), entry.Notes))
 
-		if e.HistoryID != nil {
+		if entry.HistoryID != nil {
 			l.viewReqBtn.Enable()
 		} else {
 			l.viewReqBtn.Disable()
@@ -121,7 +121,7 @@ func (l *lootTab) build() fyne.CanvasObject {
 			if !ok {
 				return
 			}
-			if err := l.st.DeleteLoot(e.ID); err != nil {
+			if err := l.projectStore.DeleteLoot(e.ID); err != nil {
 				logger.Error("loot: delete: %v", err)
 				return
 			}
@@ -170,7 +170,7 @@ func (l *lootTab) build() fyne.CanvasObject {
 }
 
 func (l *lootTab) reload() {
-	entries, err := l.st.AllLoot()
+	entries, err := l.projectStore.AllLoot()
 	if err != nil {
 		logger.Error("loot: load: %v", err)
 		return
@@ -197,8 +197,8 @@ func (l *lootTab) showAddDialog(historyID *uint64) {
 	)
 
 	sized := container.NewGridWrap(fyne.NewSize(500, 350), form)
-	dialog.ShowCustomConfirm("Add Loot", "Save", "Cancel", sized, func(ok bool) {
-		if !ok {
+	dialog.ShowCustomConfirm("Add Loot", "Save", "Cancel", sized, func(confirmed bool) {
+		if !confirmed {
 			return
 		}
 		title := strings.TrimSpace(titleEntry.Text)
@@ -211,7 +211,7 @@ func (l *lootTab) showAddDialog(historyID *uint64) {
 			Notes:     notesEntry.Text,
 			HistoryID: historyID,
 		}
-		if _, err := l.st.AddLoot(entry); err != nil {
+		if _, err := l.projectStore.AddLoot(entry); err != nil {
 			logger.Error("loot: add: %v", err)
 			return
 		}
@@ -220,7 +220,7 @@ func (l *lootTab) showAddDialog(historyID *uint64) {
 }
 
 func (l *lootTab) exportMarkdown() {
-	entries, err := l.st.AllLoot()
+	entries, err := l.projectStore.AllLoot()
 	if err != nil {
 		logger.Error("loot: export: %v", err)
 		return
@@ -248,21 +248,21 @@ func (l *lootTab) exportMarkdown() {
 		Generated: time.Now().Format("2006-01-02 15:04"),
 	}
 
-	for _, e := range entries {
-		ed := entryData{
-			Severity: e.Severity,
-			Title:    e.Title,
-			Date:     e.CreatedAt.Format("2006-01-02 15:04"),
-			Notes:    e.Notes,
+	for _, entry := range entries {
+		entryData := entryData{
+			Severity: entry.Severity,
+			Title:    entry.Title,
+			Date:     entry.CreatedAt.Format("2006-01-02 15:04"),
+			Notes:    entry.Notes,
 		}
-		if e.HistoryID != nil {
-			tx, err := l.st.GetTransaction(*e.HistoryID)
+		if entry.HistoryID != nil {
+			transaction, err := l.projectStore.GetTransaction(*entry.HistoryID)
 			if err == nil {
-				ed.Request = formatRequest(*tx)
-				ed.Response = formatResponse(*tx)
+				entryData.Request = formatRequest(*transaction)
+				entryData.Response = formatResponse(*transaction)
 			}
 		}
-		data.Entries = append(data.Entries, ed)
+		data.Entries = append(data.Entries, entryData)
 	}
 
 	tmpl, err := template.New("findings").Parse(assets.FindingsTemplate)
@@ -272,43 +272,43 @@ func (l *lootTab) exportMarkdown() {
 		return
 	}
 
-	var sb strings.Builder
-	if err := tmpl.Execute(&sb, data); err != nil {
+	var builder strings.Builder
+	if err := tmpl.Execute(&builder, data); err != nil {
 		logger.Error("loot: execute template: %v", err)
 		dialog.ShowError(err, l.win)
 		return
 	}
-	d := dialog.NewFileSave(func(uc fyne.URIWriteCloser, err error) {
-		if err != nil || uc == nil {
+	saveDialog := dialog.NewFileSave(func(writeCloser fyne.URIWriteCloser, err error) {
+		if err != nil || writeCloser == nil {
 			return
 		}
-		defer uc.Close()
-		if _, err := uc.Write([]byte(sb.String())); err != nil {
+		defer writeCloser.Close()
+		if _, err := writeCloser.Write([]byte(builder.String())); err != nil {
 			logger.Error("loot: write export: %v", err)
 			dialog.ShowError(err, l.win)
 		}
 	}, l.win)
-	d.SetFileName(fmt.Sprintf("findings-%s.md", time.Now().Format("2006-01-02")))
-	d.Show()
+	saveDialog.SetFileName(fmt.Sprintf("findings-%s.md", time.Now().Format("2006-01-02")))
+	saveDialog.Show()
 
 }
 
 func (l *lootTab) showLinkedRequest(e store.LootEntry) {
 	go func() {
-		tx, err := l.st.GetTransaction(*e.HistoryID)
+		transaction, err := l.projectStore.GetTransaction(*e.HistoryID)
 		if err != nil {
 			logger.Error("loot: get linked request: %v", err)
 			return
 		}
 		fyne.Do(func() {
 			reqEntry := newReadOnlyEntry()
-			reqEntry.SetText(formatRequest(*tx))
+			reqEntry.SetText(formatRequest(*transaction))
 
 			respEntry := newReadOnlyEntry()
-			respEntry.SetText(formatResponse(*tx))
+			respEntry.SetText(formatResponse(*transaction))
 
 			inspectBtn := widget.NewButtonWithIcon("Inspector", AppIcon("inspector"), func() {
-				showInspectorDialog(*tx, l.win)
+				showInspectorDialog(*transaction, l.win)
 			})
 
 			sendBtn := widget.NewButtonWithIcon("Send to Repeater", theme.MailForwardIcon(), nil)
@@ -323,34 +323,34 @@ func (l *lootTab) showLinkedRequest(e store.LootEntry) {
 			split := container.NewHSplit(reqPane, respPane)
 			split.SetOffset(0.5)
 
-			d := dialog.NewCustom(
-				fmt.Sprintf("Linked Request — %s %s", tx.Method, tx.URL),
+			linkedDialog := dialog.NewCustom(
+				fmt.Sprintf("Linked Request — %s %s", transaction.Method, transaction.URL),
 				"Close",
 				container.NewBorder(nil, sendBtn, nil, nil, split),
 				l.win,
 			)
 
 			sendBtn.OnTapped = func() {
-				host, portStr, err := net.SplitHostPort(tx.Host)
+				host, portStr, err := net.SplitHostPort(transaction.Host)
 				if err != nil {
-					host = tx.Host
+					host = transaction.Host
 					portStr = "443"
-					if !tx.TLS {
+					if !transaction.TLS {
 						portStr = "80"
 					}
 				}
 				port, _ := strconv.Atoi(portStr)
-				path := pathOf(tx.URL)
+				path := pathOf(transaction.URL)
 				if len(path) > 20 {
 					path = path[:20] + "..."
 				}
-				name := fmt.Sprintf("%s %s", tx.Method, path)
-				l.repeater.AddTab(name, host, port, tx.TLS, formatRequest(*tx))
-				d.Hide()
+				name := fmt.Sprintf("%s %s", transaction.Method, path)
+				l.repeater.AddTab(name, host, port, transaction.TLS, formatRequest(*transaction))
+				linkedDialog.Hide()
 			}
 
-			d.Show()
-			d.Resize(fyne.NewSize(900, 600))
+			linkedDialog.Show()
+			linkedDialog.Resize(fyne.NewSize(900, 600))
 		})
 	}()
 }

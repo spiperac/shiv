@@ -21,23 +21,23 @@ var upstreamClient = &http.Client{
 }
 
 func forward(req *http.Request) (*http.Response, error) {
-	out, err := http.NewRequestWithContext(req.Context(), req.Method, req.URL.String(), req.Body)
+	upstreamRequest, err := http.NewRequestWithContext(req.Context(), req.Method, req.URL.String(), req.Body)
 	if err != nil {
 		return nil, fmt.Errorf("forward: build request: %w", err)
 	}
-	for k, vv := range req.Header {
-		if hopByHop[k] {
+	for headerKey, headerValues := range req.Header {
+		if hopByHop[headerKey] {
 			continue
 		}
-		out.Header[k] = vv
+		upstreamRequest.Header[headerKey] = headerValues
 	}
-	stripRequestCacheHeaders(out.Header)
-	resp, err := upstreamClient.Do(out)
+	stripRequestCacheHeaders(upstreamRequest.Header)
+	upstreamResponse, err := upstreamClient.Do(upstreamRequest)
 	if err != nil {
 		return nil, fmt.Errorf("forward: upstream request: %w", err)
 	}
-	stripResponseCacheHeaders(resp.Header)
-	return resp, nil
+	stripResponseCacheHeaders(upstreamResponse.Header)
+	return upstreamResponse, nil
 }
 
 func stripRequestCacheHeaders(h http.Header) {
@@ -58,28 +58,28 @@ func stripResponseCacheHeaders(h http.Header) {
 }
 
 func decompressBody(header http.Header, body []byte) []byte {
-	ce := strings.ToLower(header.Get("Content-Encoding"))
-	r := bytes.NewReader(body)
-	switch ce {
+	contentEncoding := strings.ToLower(header.Get("Content-Encoding"))
+	bodyReader := bytes.NewReader(body)
+	switch contentEncoding {
 	case "gzip":
-		gr, err := gzip.NewReader(r)
+		gzipReader, err := gzip.NewReader(bodyReader)
 		if err != nil {
 			return body
 		}
-		defer gr.Close()
-		out, err := io.ReadAll(gr)
+		defer gzipReader.Close()
+		out, err := io.ReadAll(gzipReader)
 		if err != nil {
 			return body
 		}
 		return out
 	case "deflate":
-		out, err := io.ReadAll(flate.NewReader(r))
+		out, err := io.ReadAll(flate.NewReader(bodyReader))
 		if err != nil {
 			return body
 		}
 		return out
 	case "br":
-		out, err := io.ReadAll(brotli.NewReader(r))
+		out, err := io.ReadAll(brotli.NewReader(bodyReader))
 		if err != nil {
 			return body
 		}
@@ -91,12 +91,12 @@ func decompressBody(header http.Header, body []byte) []byte {
 }
 
 func isBinary(header http.Header) bool {
-	ce := strings.ToLower(header.Get("Content-Encoding"))
-	if ce == "zstd" {
+	contentEncoding := strings.ToLower(header.Get("Content-Encoding"))
+	if contentEncoding == "zstd" {
 		return true
 	}
-	ct := strings.ToLower(header.Get("Content-Type"))
-	if ct == "" {
+	contentType := strings.ToLower(header.Get("Content-Type"))
+	if contentType == "" {
 		return false
 	}
 	textTypes := []string{
@@ -104,8 +104,8 @@ func isBinary(header http.Header) bool {
 		"application/javascript", "application/x-www-form-urlencoded",
 		"application/xhtml", "application/ld+json",
 	}
-	for _, t := range textTypes {
-		if strings.Contains(ct, t) {
+	for _, textType := range textTypes {
+		if strings.Contains(contentType, textType) {
 			return false
 		}
 	}

@@ -1,6 +1,7 @@
 package store_test
 
 import (
+	"os"
 	"testing"
 
 	"github.com/shiv/internal/store"
@@ -8,86 +9,69 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// ── Meta ──────────────────────────────────────────────────────────────────────
+func TestDefaultSettings(t *testing.T) {
+	settings := store.DefaultSettings()
+	assert.Equal(t, "127.0.0.1", settings.ProxyHost)
+	assert.Equal(t, 9090, settings.ProxyPort)
+	assert.True(t, settings.ProxyEnabled)
+	assert.True(t, settings.DarkTheme)
+}
 
-func TestSetMeta_AndGetMeta(t *testing.T) {
-	st := newTestStore(t)
-
-	require.NoError(t, st.SetMeta("some.key", "some-value"))
-
-	val, err := st.GetMeta("some.key")
+func TestSaveAndLoadSettings(t *testing.T) {
+	tmp, err := os.CreateTemp("", "shiv-settings-*.json")
 	require.NoError(t, err)
-	assert.Equal(t, "some-value", val)
-}
+	tmp.Close()
+	store.SettingsPathOverride = tmp.Name()
+	t.Cleanup(func() {
+		store.SettingsPathOverride = ""
+		os.Remove(tmp.Name())
+	})
 
-func TestSetMeta_Upsert(t *testing.T) {
-	st := newTestStore(t)
-
-	require.NoError(t, st.SetMeta("key", "first"))
-	require.NoError(t, st.SetMeta("key", "second"))
-
-	val, err := st.GetMeta("key")
-	require.NoError(t, err)
-	assert.Equal(t, "second", val)
-}
-
-func TestGetMeta_NonExistentKey(t *testing.T) {
-	st := newTestStore(t)
-	_, err := st.GetMeta("does.not.exist")
-	assert.Error(t, err)
-}
-
-// ── ProxySettings ─────────────────────────────────────────────────────────────
-
-func TestDefaultProxySettings(t *testing.T) {
-	ps := store.DefaultProxySettings()
-	assert.Equal(t, "127.0.0.1", ps.Host)
-	assert.Equal(t, 9090, ps.Port)
-	assert.True(t, ps.Enabled)
-}
-
-func TestSaveAndLoadProxySettings(t *testing.T) {
-	st := newTestStore(t)
-
-	ps := store.ProxySettings{
-		Host:    "0.0.0.0",
-		Port:    8080,
-		Enabled: true,
+	settings := store.Settings{
+		DarkTheme:    false,
+		ProxyHost:    "0.0.0.0",
+		ProxyPort:    8080,
+		ProxyEnabled: false,
 	}
-	require.NoError(t, st.SaveProxySettings(ps))
+	require.NoError(t, store.SaveSettings(settings))
 
-	loaded := st.LoadProxySettings()
-	assert.Equal(t, "0.0.0.0", loaded.Host)
-	assert.Equal(t, 8080, loaded.Port)
-	assert.True(t, loaded.Enabled)
+	loaded := store.LoadSettings()
+	assert.Equal(t, "0.0.0.0", loaded.ProxyHost)
+	assert.Equal(t, 8080, loaded.ProxyPort)
+	assert.False(t, loaded.ProxyEnabled)
+	assert.False(t, loaded.DarkTheme)
 }
 
-func TestSaveProxySettings_DisabledFlag(t *testing.T) {
-	st := newTestStore(t)
+func TestLoadSettings_FallsBackToDefaults(t *testing.T) {
+	tmp, err := os.CreateTemp("", "shiv-settings-*.json")
+	require.NoError(t, err)
+	tmp.Close()
+	os.Remove(tmp.Name())
+	store.SettingsPathOverride = tmp.Name()
+	t.Cleanup(func() {
+		store.SettingsPathOverride = ""
+	})
 
-	ps := store.ProxySettings{Host: "127.0.0.1", Port: 9090, Enabled: false}
-	require.NoError(t, st.SaveProxySettings(ps))
-
-	loaded := st.LoadProxySettings()
-	assert.False(t, loaded.Enabled)
+	settings := store.LoadSettings()
+	assert.Equal(t, store.DefaultSettings(), settings)
 }
 
-func TestSaveProxySettings_Upsert(t *testing.T) {
-	st := newTestStore(t)
+func TestSaveSettings_Upsert(t *testing.T) {
+	tmp, err := os.CreateTemp("", "shiv-settings-*.json")
+	require.NoError(t, err)
+	tmp.Close()
+	store.SettingsPathOverride = tmp.Name()
+	t.Cleanup(func() {
+		store.SettingsPathOverride = ""
+		os.Remove(tmp.Name())
+	})
 
-	require.NoError(t, st.SaveProxySettings(store.ProxySettings{Host: "127.0.0.1", Port: 9090, Enabled: true}))
-	require.NoError(t, st.SaveProxySettings(store.ProxySettings{Host: "0.0.0.0", Port: 1234, Enabled: false}))
+	require.NoError(t, store.SaveSettings(store.Settings{ProxyHost: "127.0.0.1", ProxyPort: 9090, ProxyEnabled: true, DarkTheme: true}))
+	require.NoError(t, store.SaveSettings(store.Settings{ProxyHost: "0.0.0.0", ProxyPort: 1234, ProxyEnabled: false, DarkTheme: false}))
 
-	loaded := st.LoadProxySettings()
-	assert.Equal(t, "0.0.0.0", loaded.Host)
-	assert.Equal(t, 1234, loaded.Port)
-	assert.False(t, loaded.Enabled)
-}
-
-func TestLoadProxySettings_FallsBackToDefaults(t *testing.T) {
-	st := newTestStore(t)
-
-	// nothing saved — should return defaults
-	ps := st.LoadProxySettings()
-	assert.Equal(t, store.DefaultProxySettings(), ps)
+	loaded := store.LoadSettings()
+	assert.Equal(t, "0.0.0.0", loaded.ProxyHost)
+	assert.Equal(t, 1234, loaded.ProxyPort)
+	assert.False(t, loaded.ProxyEnabled)
+	assert.False(t, loaded.DarkTheme)
 }

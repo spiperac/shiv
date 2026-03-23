@@ -16,23 +16,25 @@ import (
 
 var settingsWin fyne.Window
 
-func showSettingsDialog(app fyne.App, _ fyne.Window, st *store.Store, p *proxy.Proxy) {
-	ps := st.LoadProxySettings()
+func showSettingsDialog(app fyne.App, _ fyne.Window, proxyServer *proxy.Proxy) {
 	if settingsWin != nil {
 		settingsWin.RequestFocus()
 		return
 	}
+
+	settings := store.LoadSettings()
+
 	caStatus := widget.NewLabel("")
 	caStatus.Wrapping = fyne.TextWrapBreak
 
 	installBtn := widget.NewButton("Install CA Certificate", func() {
-		ca, err := cert.Load()
+		certAuth, err := cert.Load()
 		if err != nil {
 			caStatus.SetText("Error loading CA: " + err.Error())
 			logger.Error("settings: load CA: %v", err)
 			return
 		}
-		msg, err := ca.InstallCA()
+		msg, err := certAuth.InstallCA()
 		if err != nil {
 			caStatus.SetText("Installation failed:\n" + err.Error())
 			logger.Error("settings: install CA: %v", err)
@@ -43,15 +45,15 @@ func showSettingsDialog(app fyne.App, _ fyne.Window, st *store.Store, p *proxy.P
 	installBtn.Importance = widget.HighImportance
 
 	hostEntry := widget.NewEntry()
-	hostEntry.SetText(ps.Host)
+	hostEntry.SetText(settings.ProxyHost)
 	hostEntry.SetPlaceHolder("127.0.0.1")
 
 	portEntry := widget.NewEntry()
-	portEntry.SetText(strconv.Itoa(ps.Port))
+	portEntry.SetText(strconv.Itoa(settings.ProxyPort))
 	portEntry.SetPlaceHolder("9090")
 
 	enabledCheck := widget.NewCheck("Proxy enabled", nil)
-	enabledCheck.Checked = ps.Enabled
+	enabledCheck.Checked = settings.ProxyEnabled
 
 	proxyStatus := widget.NewLabel("")
 	proxyStatus.Wrapping = fyne.TextWrapBreak
@@ -64,28 +66,27 @@ func showSettingsDialog(app fyne.App, _ fyne.Window, st *store.Store, p *proxy.P
 			return
 		}
 
-		newPS := store.ProxySettings{
-			Host:    host,
-			Port:    port,
-			Enabled: enabledCheck.Checked,
-		}
+		currentSettings := store.LoadSettings()
+		currentSettings.ProxyHost = host
+		currentSettings.ProxyPort = port
+		currentSettings.ProxyEnabled = enabledCheck.Checked
 
-		if err := st.SaveProxySettings(newPS); err != nil {
+		if err := store.SaveSettings(currentSettings); err != nil {
 			proxyStatus.SetText("Failed to save settings: " + err.Error())
-			logger.Error("settings: save proxy: %v", err)
+			logger.Error("settings: save: %v", err)
 			return
 		}
 
 		if enabledCheck.Checked {
 			addr := fmt.Sprintf("%s:%d", host, port)
-			if err := p.Restart(addr); err != nil {
+			if err := proxyServer.Restart(addr); err != nil {
 				proxyStatus.SetText("Failed to restart proxy: " + err.Error())
 				logger.Error("settings: restart proxy: %v", err)
 				return
 			}
 			proxyStatus.SetText(fmt.Sprintf("Proxy restarted on %s:%d", host, port))
 		} else {
-			p.Stop()
+			proxyServer.Stop()
 			proxyStatus.SetText("Proxy stopped.")
 		}
 	})
