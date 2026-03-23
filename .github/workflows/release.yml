@@ -64,10 +64,30 @@ jobs:
           go-version: '1.21'
       - name: Install Fyne
         run: go install fyne.io/tools/cmd/fyne@latest
-      - name: Package for macOS
-        run: fyne package -os darwin
+
+      - name: Package for macOS arm64
+        run: GOARCH=arm64 fyne package -os darwin
+
+      - name: Move arm64 binary
+        run: mv Shiv.app/Contents/MacOS/Shiv Shiv.app/Contents/MacOS/Shiv-arm64
+
+      - name: Package for macOS amd64
+        run: GOARCH=amd64 fyne package -os darwin
+
+      - name: Move amd64 binary
+        run: mv Shiv.app/Contents/MacOS/Shiv Shiv.app/Contents/MacOS/Shiv-amd64
+
+      - name: Create universal binary with lipo
+        run: |
+          lipo -create \
+            Shiv.app/Contents/MacOS/Shiv-arm64 \
+            Shiv.app/Contents/MacOS/Shiv-amd64 \
+            -output Shiv.app/Contents/MacOS/Shiv
+          rm Shiv.app/Contents/MacOS/Shiv-arm64 Shiv.app/Contents/MacOS/Shiv-amd64
+
       - name: Zip the app
         run: zip -r Shiv-macos.zip Shiv.app
+
       - name: Upload to release
         uses: actions/upload-release-asset@v1
         env:
