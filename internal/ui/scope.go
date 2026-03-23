@@ -118,5 +118,7 @@ func showScopeDialog(projectStore *store.Store, win fyne.Window) {
 
 	scopeDialog := dialog.NewCustom("Scope", "Close", content, win)
 	scopeDialog.Resize(fyne.NewSize(400, 350))
+
+	closeOnEscape(win, scopeDialog.Dismiss)
 	scopeDialog.Show()
 }

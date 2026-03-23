@@ -35,6 +35,7 @@ func showInspectorDialog(tx store.Transaction, win fyne.Window) {
 
 	inspectorDialog := dialog.NewCustom("Inspector", "Close", tabs, win)
 	inspectorDialog.Resize(fyne.NewSize(600, 400))
+	closeOnEscape(win, inspectorDialog.Dismiss)
 	inspectorDialog.Show()
 }
 

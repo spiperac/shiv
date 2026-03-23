@@ -122,5 +122,6 @@ func showSettingsDialog(app fyne.App, _ fyne.Window, proxyServer *proxy.Proxy) {
 			settingsWin.Close()
 		}
 	})
+	closeOnEscape(settingsWin, settingsWin.Close)
 	settingsWin.Show()
 }

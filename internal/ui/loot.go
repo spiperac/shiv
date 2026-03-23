@@ -197,7 +197,7 @@ func (l *lootTab) showAddDialog(historyID *uint64) {
 	)
 
 	sized := container.NewGridWrap(fyne.NewSize(500, 350), form)
-	dialog.ShowCustomConfirm("Add Loot", "Save", "Cancel", sized, func(confirmed bool) {
+	addLootDialog := dialog.NewCustomConfirm("Add Loot", "Save", "Cancel", sized, func(confirmed bool) {
 		if !confirmed {
 			return
 		}
@@ -217,6 +217,8 @@ func (l *lootTab) showAddDialog(historyID *uint64) {
 		}
 		l.reload()
 	}, l.win)
+	closeOnEscape(l.win, addLootDialog.Dismiss)
+	addLootDialog.Show()
 }
 
 func (l *lootTab) exportMarkdown() {
@@ -349,6 +351,7 @@ func (l *lootTab) showLinkedRequest(e store.LootEntry) {
 				linkedDialog.Hide()
 			}
 
+			closeOnEscape(l.win, linkedDialog.Dismiss)
 			linkedDialog.Show()
 			linkedDialog.Resize(fyne.NewSize(900, 600))
 		})

@@ -398,9 +398,3 @@ func formatResponse(tx store.Transaction) string {
 	}
 	return builder.String()
 }
-
-func newBoldLabel(text string) *widget.Label {
-	l := widget.NewLabel(text)
-	l.TextStyle = fyne.TextStyle{Bold: true}
-	return l
-}

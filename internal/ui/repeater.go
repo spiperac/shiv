@@ -68,6 +68,17 @@ func (e *repeaterEntry) TypedShortcut(shortcut fyne.Shortcut) {
 	e.Entry.TypedShortcut(shortcut)
 }
 
+func (r *repeaterTab) closeTab(closed *container.TabItem) {
+	if tabId, ok := r.tabIDs[closed]; ok {
+		logger.Info("repeater: OnClosed called, found=%v id=%d", ok, tabId)
+		if err := r.projectStore.DeleteRepeaterTab(tabId); err != nil {
+			logger.Error("repeater: delete tab: %v", err)
+		}
+		delete(r.tabIDs, closed)
+	}
+	delete(r.sendFns, closed)
+}
+
 func (r *repeaterTab) build() fyne.CanvasObject {
 	r.tabs = container.NewDocTabs()
 	r.tabs.SetTabLocation(container.TabLocationTop)
@@ -82,16 +93,16 @@ func (r *repeaterTab) build() fyne.CanvasObject {
 		}
 	})
 
-	r.tabs.OnClosed = func(closed *container.TabItem) {
-		if tabId, ok := r.tabIDs[closed]; ok {
-			logger.Info("repeater: OnClosed called, found=%v id=%d", ok, tabId)
-			if err := r.projectStore.DeleteRepeaterTab(tabId); err != nil {
-				logger.Error("repeater: delete tab: %v", err)
-			}
-			delete(r.tabIDs, closed)
+	r.win.Canvas().AddShortcut(&desktop.CustomShortcut{KeyName: fyne.KeyW, Modifier: fyne.KeyModifierControl}, func(_ fyne.Shortcut) {
+		selected := r.tabs.Selected()
+		if selected == nil {
+			return
 		}
-		delete(r.sendFns, closed)
-	}
+		r.closeTab(selected)
+		r.tabs.Remove(selected)
+	})
+
+	r.tabs.OnClosed = r.closeTab
 
 	r.tabs.CreateTab = func() *container.TabItem {
 		saved := store.RepeaterTab{
