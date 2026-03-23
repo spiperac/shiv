@@ -27,6 +27,7 @@ import (
 
 type repeaterTab struct {
 	projectStore *store.Store
+	loot         *lootTab
 	tabs         *container.DocTabs
 	win          fyne.Window
 	tabIDs       map[*container.TabItem]int64
@@ -161,12 +162,25 @@ func (r *repeaterTab) buildTabItem(tab store.RepeaterTab) *container.TabItem {
 	sendBtn := widget.NewButtonWithIcon("Send", theme.MailSendIcon(), nil)
 	sendBtn.Importance = widget.HighImportance
 
-	var lastTransaction store.Transaction
+	var lastRawRequest string
+	var lastRawResponse string
 
 	inspectBtn := widget.NewButtonWithIcon("Inspector", AppIcon("inspector"), func() {
-		showInspectorDialog(lastTransaction, r.win)
+		lastTx := store.Transaction{
+			RespHeaders: parseRawHeaders(lastRawResponse),
+			RespBody:    []byte(lastRawResponse),
+		}
+		showInspectorDialog(lastTx, r.win)
 	})
 	inspectBtn.Disable()
+
+	sendToLootBtn := widget.NewButtonWithIcon("Send to Loot", AppIcon("loot"), func() {
+		if r.loot == nil {
+			return
+		}
+		r.loot.showAddDialog(nil, lastRawRequest, lastRawResponse)
+	})
+	sendToLootBtn.Disable()
 
 	tabID := tab.ID
 
@@ -190,11 +204,10 @@ func (r *repeaterTab) buildTabItem(tab store.RepeaterTab) *container.TabItem {
 					logger.Error("repeater: send: %v", err)
 				} else {
 					respLabel.SetText(resp)
-					lastTransaction = store.Transaction{
-						RespHeaders: parseRawHeaders(resp),
-						RespBody:    []byte(resp),
-					}
+					lastRawRequest = rawReq
+					lastRawResponse = resp
 					inspectBtn.Enable()
+					sendToLootBtn.Enable()
 				}
 				if saveErr := r.projectStore.UpdateRepeaterTab(tabID, rawReq, respLabel.Text); saveErr != nil {
 					logger.Error("repeater: update tab: %v", saveErr)
@@ -208,10 +221,9 @@ func (r *repeaterTab) buildTabItem(tab store.RepeaterTab) *container.TabItem {
 
 	cloneBtn := widget.NewButtonWithIcon("Clone", theme.ContentCopyIcon(), func() {
 		raw := reqEditor.Text
-		// grab first line e.g. "POST /new/path HTTP/1.1"
 		firstLine := strings.SplitN(raw, "\n", 2)[0]
 		parts := strings.Fields(firstLine)
-		name := tab.Name // fallback
+		name := tab.Name
 		if len(parts) >= 2 {
 			path := parts[1]
 			if len(path) > 20 {
@@ -232,7 +244,10 @@ func (r *repeaterTab) buildTabItem(tab store.RepeaterTab) *container.TabItem {
 		container.NewScroll(reqEditor))
 
 	respPane := container.NewBorder(
-		container.NewBorder(nil, nil, nil, inspectBtn, newBoldLabel("Response")),
+		container.NewBorder(nil, nil, nil,
+			container.NewHBox(sendToLootBtn, inspectBtn),
+			newBoldLabel("Response"),
+		),
 		nil, nil, nil,
 		container.NewScroll(respLabel))
 

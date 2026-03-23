@@ -13,7 +13,6 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/driver/desktop"
-	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
 	"github.com/shiv/internal/logger"
@@ -37,7 +36,6 @@ type historyTab struct {
 	respLabel    *readOnlyEntry
 	sendRepeater *widget.Button
 	sendLoot     *widget.Button
-	clearBtn     *widget.Button
 	scopeBtn     *widget.Button
 
 	selectedTx  store.Transaction
@@ -47,13 +45,14 @@ type historyTab struct {
 var tableColumns = []string{"Method", "Host", "Path", "Status", "Size", "Duration"}
 var columnWidths = []float32{80, 200, 300, 70, 90, 90}
 
-func newHistoryTab(st *store.Store, win fyne.Window, repeater *repeaterTab, loot *lootTab) fyne.CanvasObject {
-	h := &historyTab{projectStore: st, win: win, repeater: repeater, loot: loot}
+func newHistoryTab(projectStore *store.Store, win fyne.Window, repeater *repeaterTab, loot *lootTab) fyne.CanvasObject {
+	h := &historyTab{projectStore: projectStore, win: win, repeater: repeater, loot: loot}
 	return h.build()
 }
+
 func (h *historyTab) build() fyne.CanvasObject {
 	h.filterEntry = widget.NewEntry()
-	h.filterEntry.SetPlaceHolder("Filter — host, path, method...")
+	h.filterEntry.SetPlaceHolder("Filter — host, path, method, status...")
 	h.filterEntry.OnChanged = func(_ string) { h.applyFilter() }
 
 	h.showOutScope = widget.NewCheck("Show out-of-scope", func(_ bool) { h.applyFilter() })
@@ -63,8 +62,26 @@ func (h *historyTab) build() fyne.CanvasObject {
 		showScopeDialog(h.projectStore, h.win)
 	})
 
+	clearBtn := widget.NewButtonWithIcon("Clear", AppIcon("delete"), func() {
+		if err := h.projectStore.ClearHistory(); err != nil {
+			logger.Error("clear history: %v", err)
+			return
+		}
+		h.mu.Lock()
+		h.rows = nil
+		h.filtered = nil
+		h.mu.Unlock()
+		h.table.Refresh()
+		h.selectedTx = store.Transaction{}
+		h.hasSelected = false
+		h.reqLabel.SetText("")
+		h.respLabel.SetText("")
+		h.sendRepeater.Disable()
+		h.sendLoot.Disable()
+	})
+
 	filterBar := container.NewBorder(nil, nil, nil,
-		container.NewHBox(h.showOutScope, h.scopeBtn),
+		container.NewHBox(h.showOutScope, h.scopeBtn, clearBtn),
 		h.filterEntry,
 	)
 
@@ -139,24 +156,7 @@ func (h *historyTab) build() fyne.CanvasObject {
 	h.reqLabel = newReadOnlyEntry()
 	h.respLabel = newReadOnlyEntry()
 
-	reqPane := container.NewBorder(newBoldLabel("Request"), nil, nil, nil,
-		container.NewScroll(h.reqLabel))
-	inspectBtn := widget.NewButtonWithIcon("Inspector", AppIcon("inspector"), func() {
-		if !h.hasSelected {
-			return
-		}
-		showInspectorDialog(h.selectedTx, h.win)
-	})
-
-	respPane := container.NewBorder(
-		container.NewBorder(nil, nil, nil, inspectBtn, newBoldLabel("Response")),
-		nil, nil, nil,
-		container.NewScroll(h.respLabel))
-
-	detailSplit := container.NewHSplit(reqPane, respPane)
-	detailSplit.SetOffset(0.5)
-
-	h.sendRepeater = widget.NewButtonWithIcon("Send to Repeater", theme.MailForwardIcon(), func() {
+	h.sendRepeater = widget.NewButtonWithIcon("Send to Repeater", AppIcon("repeater"), func() {
 		if !h.hasSelected {
 			return
 		}
@@ -177,6 +177,8 @@ func (h *historyTab) build() fyne.CanvasObject {
 		name := fmt.Sprintf("%s %s", tx.Method, path)
 		h.repeater.AddTab(name, host, port, tx.TLS, formatRequest(tx))
 	})
+	h.sendRepeater.Disable()
+
 	h.win.Canvas().AddShortcut(&desktop.CustomShortcut{KeyName: fyne.KeyR, Modifier: fyne.KeyModifierControl}, func(_ fyne.Shortcut) {
 		if h.hasSelected {
 			h.sendRepeater.OnTapped()
@@ -188,43 +190,38 @@ func (h *historyTab) build() fyne.CanvasObject {
 			return
 		}
 		id := h.selectedTx.ID
-		h.loot.showAddDialog(&id)
+		h.loot.showAddDialog(&id, "", "")
 	})
-	h.sendRepeater.Disable()
 	h.sendLoot.Disable()
 
-	clearBtn := widget.NewButtonWithIcon("Clear History", AppIcon("delete"), func() {
-		if err := h.projectStore.ClearHistory(); err != nil {
-			logger.Error("clear history: %v", err)
+	inspectBtn := widget.NewButtonWithIcon("Inspector", AppIcon("inspector"), func() {
+		if !h.hasSelected {
 			return
 		}
-		h.mu.Lock()
-		h.rows = nil
-		h.filtered = nil
-		h.mu.Unlock()
-		h.table.Refresh()
-		h.selectedTx = store.Transaction{}
-		h.hasSelected = false
-		h.reqLabel.SetText("")
-		h.respLabel.SetText("")
-		h.sendRepeater.Disable()
-		h.sendLoot.Disable()
+		showInspectorDialog(h.selectedTx, h.win)
 	})
 
-	detailPane := container.NewBorder(
-		nil,
-		container.NewHBox(h.sendRepeater, h.sendLoot, clearBtn),
-		nil, nil,
-		detailSplit,
+	reqPane := container.NewBorder(
+		container.NewBorder(nil, nil, nil, h.sendRepeater, newBoldLabel("Request")),
+		nil, nil, nil,
+		container.NewScroll(h.reqLabel),
 	)
+
+	respPane := container.NewBorder(
+		container.NewBorder(nil, nil, nil, container.NewHBox(h.sendLoot, inspectBtn), newBoldLabel("Response")),
+		nil, nil, nil,
+		container.NewScroll(h.respLabel),
+	)
+
+	detailSplit := container.NewHSplit(reqPane, respPane)
+	detailSplit.SetOffset(0.5)
 
 	mainSplit := container.NewVSplit(
 		container.NewBorder(filterBar, nil, nil, nil, h.table),
-		detailPane,
+		detailSplit,
 	)
 	mainSplit.SetOffset(0.5)
 
-	// Load existing rows from DB on startup.
 	go func() {
 		txs, err := h.projectStore.AllTransactions()
 		if err != nil {
@@ -286,7 +283,8 @@ func (h *historyTab) applyFilter() {
 			continue
 		}
 		if query != "" {
-			if !strings.Contains(strings.ToLower(tx.Host+tx.URL+tx.Method+strconv.Itoa(tx.StatusCode)), query) {
+			searchable := strings.ToLower(tx.Host + tx.URL + tx.Method + strconv.Itoa(tx.StatusCode))
+			if !strings.Contains(searchable, query) {
 				continue
 			}
 		}
@@ -301,8 +299,6 @@ func (h *historyTab) applyFilter() {
 	h.table.Refresh()
 }
 
-// watchUpdates receives new transactions and schedules a filtered rebuild
-// on a short timer to avoid mutating filtered between cell clicks.
 func (h *historyTab) watchUpdates() {
 	for tx := range h.projectStore.Updates {
 		transaction := tx
@@ -341,11 +337,11 @@ func prettyJSON(body []byte) []byte {
 	if len(body) == 0 {
 		return body
 	}
-	var buf bytes.Buffer
-	if err := json.Indent(&buf, body, "", "  "); err != nil {
-		return body // not valid JSON, return as-is
+	var jsonBuf bytes.Buffer
+	if err := json.Indent(&jsonBuf, body, "", "  "); err != nil {
+		return body
 	}
-	return buf.Bytes()
+	return jsonBuf.Bytes()
 }
 
 func formatRequest(tx store.Transaction) string {

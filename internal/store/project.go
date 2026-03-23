@@ -88,6 +88,14 @@ func (s *Store) migrate() error {
 	if err != nil {
 		return fmt.Errorf("store: migrate: %w", err)
 	}
+	// Add new columns to existing tables if they don't exist
+	migrations := []string{
+		`ALTER TABLE loot ADD COLUMN raw_request TEXT DEFAULT ''`,
+		`ALTER TABLE loot ADD COLUMN raw_response TEXT DEFAULT ''`,
+	}
+	for _, migration := range migrations {
+		s.db.Exec(migration) // ignore errors — column may already exist
+	}
 	return nil
 }
 
@@ -130,12 +138,14 @@ CREATE TABLE IF NOT EXISTS repeater_tabs (
 );
 
 CREATE TABLE IF NOT EXISTS loot (
-	id         INTEGER PRIMARY KEY AUTOINCREMENT,
-	title      TEXT    NOT NULL,
-	severity   TEXT    NOT NULL,
-	notes      TEXT,
-	history_id INTEGER REFERENCES history(id),
-	created_at TEXT    NOT NULL
+	id           INTEGER PRIMARY KEY AUTOINCREMENT,
+	title        TEXT    NOT NULL,
+	severity     TEXT    NOT NULL,
+	notes        TEXT,
+	history_id   INTEGER REFERENCES history(id),
+	raw_request  TEXT    DEFAULT '',
+	raw_response TEXT    DEFAULT '',
+	created_at   TEXT    NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS scope (

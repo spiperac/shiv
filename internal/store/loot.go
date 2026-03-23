@@ -6,17 +6,19 @@ import (
 )
 
 type LootEntry struct {
-	ID        int64
-	Title     string
-	Severity  string
-	Notes     string
-	HistoryID *uint64
-	CreatedAt time.Time
+	ID          int64
+	Title       string
+	Severity    string
+	Notes       string
+	HistoryID   *uint64
+	RawRequest  string
+	RawResponse string
+	CreatedAt   time.Time
 }
 
 func (s *Store) AllLoot() ([]LootEntry, error) {
 	rows, err := s.db.Query(`
-		SELECT id, title, severity, notes, history_id, created_at
+		SELECT id, title, severity, notes, history_id, raw_request, raw_response, created_at
 		FROM loot ORDER BY 
 		CASE severity
 			WHEN 'Critical' THEN 1
@@ -36,7 +38,7 @@ func (s *Store) AllLoot() ([]LootEntry, error) {
 		var entry LootEntry
 		var histID *int64
 		var timestampStr string
-		if err := rows.Scan(&entry.ID, &entry.Title, &entry.Severity, &entry.Notes, &histID, &timestampStr); err != nil {
+		if err := rows.Scan(&entry.ID, &entry.Title, &entry.Severity, &entry.Notes, &histID, &entry.RawRequest, &entry.RawResponse, &timestampStr); err != nil {
 			return nil, fmt.Errorf("store: scan loot: %w", err)
 		}
 		if histID != nil {
@@ -49,23 +51,24 @@ func (s *Store) AllLoot() ([]LootEntry, error) {
 	return entries, rows.Err()
 }
 
-func (s *Store) AddLoot(e LootEntry) (int64, error) {
+func (s *Store) AddLoot(entry LootEntry) (int64, error) {
 	var id int64
 	err := s.write(func() error {
 		var histID any
-		if e.HistoryID != nil {
-			histID = *e.HistoryID
+		if entry.HistoryID != nil {
+			histID = *entry.HistoryID
 		}
-		res, err := s.db.Exec(`
-			INSERT INTO loot (title, severity, notes, history_id, created_at)
-			VALUES (?, ?, ?, ?, ?)`,
-			e.Title, e.Severity, e.Notes, histID,
+		result, err := s.db.Exec(`
+			INSERT INTO loot (title, severity, notes, history_id, raw_request, raw_response, created_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			entry.Title, entry.Severity, entry.Notes, histID,
+			entry.RawRequest, entry.RawResponse,
 			time.Now().UTC().Format(time.RFC3339),
 		)
 		if err != nil {
 			return fmt.Errorf("store: add loot: %w", err)
 		}
-		id, err = res.LastInsertId()
+		id, err = result.LastInsertId()
 		return err
 	})
 	return id, err

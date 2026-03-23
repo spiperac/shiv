@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"net"
 	"regexp"
 	"strconv"
 	"strings"
@@ -34,6 +35,8 @@ type intruderResult struct {
 type intruderTab struct {
 	win          fyne.Window
 	projectStore *store.Store
+	repeater     *repeaterTab
+	loot         *lootTab
 
 	reqEditor     *repeaterEntry
 	payloadEntry  *widget.Entry
@@ -43,6 +46,11 @@ type intruderTab struct {
 	progressLabel *widget.Label
 	responsePane  *readOnlyEntry
 	requestPane   *readOnlyEntry
+
+	sendToRepeaterBtn *widget.Button
+	sendToLootBtn     *widget.Button
+
+	selectedResult *intruderResult
 
 	config store.IntruderConfig
 
@@ -56,10 +64,12 @@ type intruderTab struct {
 	stopChan chan struct{}
 }
 
-func newIntruderTab(win fyne.Window, projectStore *store.Store) fyne.CanvasObject {
+func newIntruderTab(win fyne.Window, projectStore *store.Store, repeater *repeaterTab, loot *lootTab) fyne.CanvasObject {
 	tab := &intruderTab{
 		win:          win,
 		projectStore: projectStore,
+		repeater:     repeater,
+		loot:         loot,
 		config:       projectStore.LoadIntruderConfig(),
 	}
 	return tab.build()
@@ -103,27 +113,21 @@ func (t *intruderTab) showConfigDialog() {
 		if !confirmed {
 			return
 		}
-
 		if delay, err := strconv.Atoi(strings.TrimSpace(delayEntry.Text)); err == nil && delay >= 0 {
 			t.config.DelayMs = delay
 		}
-
 		if statusText := strings.TrimSpace(stopOnStatusEntry.Text); statusText == "" || statusText == "0" {
 			t.config.StopOnStatus = 0
 		} else if status, err := strconv.Atoi(statusText); err == nil && status > 0 {
 			t.config.StopOnStatus = status
 		}
-
 		if maxRedirects, err := strconv.Atoi(strings.TrimSpace(maxRedirectsEntry.Text)); err == nil && maxRedirects >= 0 {
 			t.config.MaxRedirects = maxRedirects
 		}
-
 		t.config.FollowRedirects = followRedirectsSelect.Selected
-
 		if timeout, err := strconv.Atoi(strings.TrimSpace(timeoutEntry.Text)); err == nil && timeout > 0 {
 			t.config.TimeoutMs = timeout
 		}
-
 		t.config.RawRequest = t.reqEditor.Text
 		t.config.Payloads = t.payloadEntry.Text
 		t.projectStore.SaveIntruderConfig(t.config)
@@ -196,7 +200,36 @@ func (t *intruderTab) build() fyne.CanvasObject {
 		t.progressLabel.SetText("")
 		t.responsePane.SetText("")
 		t.requestPane.SetText("")
+		t.selectedResult = nil
+		t.sendToRepeaterBtn.Disable()
+		t.sendToLootBtn.Disable()
 	})
+
+	t.sendToRepeaterBtn = widget.NewButtonWithIcon("Repeater", theme.MailForwardIcon(), func() {
+		if t.selectedResult == nil {
+			return
+		}
+		host, portStr, err := net.SplitHostPort(parseHostFromRawString(t.selectedResult.rawReq))
+		if err != nil {
+			host = parseHostFromRawString(t.selectedResult.rawReq)
+			portStr = "443"
+		}
+		port, _ := strconv.Atoi(portStr)
+		path := pathOf(extractURL(t.selectedResult.rawReq))
+		if len(path) > 20 {
+			path = path[:20] + "..."
+		}
+		name := fmt.Sprintf("Intruder %s", path)
+		t.repeater.AddTab(name, host, port, port == 443, t.selectedResult.rawReq)
+	})
+	t.sendToRepeaterBtn.Disable()
+	t.sendToLootBtn = widget.NewButtonWithIcon("Loot", AppIcon("loot"), func() {
+		if t.selectedResult == nil {
+			return
+		}
+		t.loot.showAddDialog(nil, t.selectedResult.rawReq, t.selectedResult.rawResp)
+	})
+	t.sendToLootBtn.Disable()
 
 	t.responsePane = newReadOnlyEntry()
 	t.responsePane.SetPlaceHolder("Select a result to view response...")
@@ -204,12 +237,20 @@ func (t *intruderTab) build() fyne.CanvasObject {
 	t.requestPane = newReadOnlyEntry()
 	t.requestPane.SetPlaceHolder("Select a result to view request...")
 
-	detailTabs := container.NewAppTabs(
-		container.NewTabItem("Response", container.NewScroll(t.responsePane)),
-		container.NewTabItem("Request", container.NewScroll(t.requestPane)),
+	respPane := container.NewBorder(
+		container.NewBorder(nil, nil, nil, t.sendToLootBtn, newBoldLabel("Response")),
+		nil, nil, nil,
+		container.NewScroll(t.responsePane),
 	)
-	detailTabs.SetTabLocation(container.TabLocationTop)
 
+	requestPane := container.NewBorder(
+		container.NewBorder(nil, nil, nil, t.sendToRepeaterBtn, newBoldLabel("Request")),
+		nil, nil, nil,
+		container.NewScroll(t.requestPane),
+	)
+
+	detailPane := container.NewHSplit(respPane, requestPane)
+	detailPane.SetOffset(0.5)
 	t.table = widget.NewTable(
 		func() (int, int) {
 			t.mu.RLock()
@@ -280,6 +321,9 @@ func (t *intruderTab) build() fyne.CanvasObject {
 		}
 		result := t.filtered[idx]
 		t.mu.RUnlock()
+		t.selectedResult = &result
+		t.sendToRepeaterBtn.Enable()
+		t.sendToLootBtn.Enable()
 		if result.err != "" {
 			t.responsePane.SetText("Error: " + result.err)
 			t.requestPane.SetText(result.rawReq)
@@ -312,13 +356,32 @@ func (t *intruderTab) build() fyne.CanvasObject {
 		t.table,
 	)
 
-	resultsSplit := container.NewHSplit(tablePane, detailTabs)
+	resultsSplit := container.NewHSplit(tablePane, detailPane)
 	resultsSplit.SetOffset(0.4)
 
 	mainSplit := container.NewVSplit(configSplit, resultsSplit)
 	mainSplit.SetOffset(0.45)
 
 	return container.NewBorder(toolbar, nil, nil, nil, mainSplit)
+}
+
+func parseHostFromRawString(rawReq string) string {
+	for line := range strings.SplitSeq(rawReq, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(strings.ToLower(line), "host:") {
+			return strings.TrimSpace(line[5:])
+		}
+	}
+	return ""
+}
+
+func extractURL(rawReq string) string {
+	firstLine := strings.SplitN(rawReq, "\n", 2)[0]
+	parts := strings.Fields(firstLine)
+	if len(parts) >= 2 {
+		return parts[1]
+	}
+	return "/"
 }
 
 func (t *intruderTab) followRedirect(rawResp string, originalHost string) (string, bool) {
@@ -334,7 +397,6 @@ func (t *intruderTab) followRedirect(rawResp string, originalHost string) (strin
 		return "", false
 	}
 
-	// find Location header
 	location := ""
 	for _, line := range strings.Split(rawResp, "\r\n") {
 		if strings.HasPrefix(strings.ToLower(line), "location:") {
@@ -347,7 +409,6 @@ func (t *intruderTab) followRedirect(rawResp string, originalHost string) (strin
 		return "", false
 	}
 
-	// check follow scope
 	switch t.config.FollowRedirects {
 	case "never":
 		return "", false
@@ -356,10 +417,8 @@ func (t *intruderTab) followRedirect(rawResp string, originalHost string) (strin
 			return "", false
 		}
 	case "always":
-		// always follow
 	}
 
-	// build a simple GET request to the redirect location
 	var redirectHost string
 	var redirectPath string
 	var useTLS bool
@@ -385,7 +444,6 @@ func (t *intruderTab) followRedirect(rawResp string, originalHost string) (strin
 			redirectPath = "/"
 		}
 	} else {
-		// relative redirect — use original host
 		redirectHost = originalHost
 		redirectPath = location
 		useTLS = strings.HasSuffix(originalHost, ":443")
@@ -395,26 +453,13 @@ func (t *intruderTab) followRedirect(rawResp string, originalHost string) (strin
 	if !useTLS {
 		port = 80
 	}
-	host, portStr, err := parsePort(redirectHost)
-	if err == nil {
+	if host, portStr, err := net.SplitHostPort(redirectHost); err == nil {
 		redirectHost = host
 		fmt.Sscanf(portStr, "%d", &port)
 	}
 
 	redirectReq := fmt.Sprintf("GET %s HTTP/1.1\r\nHost: %s\r\n\r\n", redirectPath, redirectHost)
-	return sendRawRequestWithHost(redirectHost, port, useTLS, redirectReq)
-}
-
-func parsePort(hostport string) (host, port string, err error) {
-	colonIdx := strings.LastIndex(hostport, ":")
-	if colonIdx < 0 {
-		return "", "", fmt.Errorf("no port")
-	}
-	return hostport[:colonIdx], hostport[colonIdx+1:], nil
-}
-
-func sendRawRequestWithHost(host string, port int, useTLS bool, rawReq string) (string, bool) {
-	resp, err := sendRawRequest(host, port, useTLS, rawReq)
+	resp, err := sendRawRequest(redirectHost, port, useTLS, redirectReq)
 	if err != nil {
 		return "", false
 	}
@@ -454,7 +499,6 @@ func (t *intruderTab) startAttack() {
 		return
 	}
 
-	// persist current request and payloads
 	t.config.RawRequest = rawReq
 	t.config.Payloads = t.payloadEntry.Text
 	t.projectStore.SaveIntruderConfig(t.config)
@@ -466,6 +510,9 @@ func (t *intruderTab) startAttack() {
 	t.table.Refresh()
 	t.responsePane.SetText("")
 	t.requestPane.SetText("")
+	t.selectedResult = nil
+	t.sendToRepeaterBtn.Disable()
+	t.sendToLootBtn.Disable()
 
 	t.running.Store(true)
 	t.stopChan = make(chan struct{})
@@ -510,7 +557,6 @@ func (t *intruderTab) startAttack() {
 					if err != nil {
 						result.err = err.Error()
 					} else {
-						// follow redirects
 						if config.FollowRedirects != "never" && config.MaxRedirects > 0 {
 							for redirectCount := 0; redirectCount < config.MaxRedirects; redirectCount++ {
 								redirectResp, followed := t.followRedirect(resp, host)
@@ -520,7 +566,6 @@ func (t *intruderTab) startAttack() {
 								resp = redirectResp
 							}
 						}
-
 						result.durationMs = elapsed
 						result.size = len(resp)
 						result.rawResp = resp

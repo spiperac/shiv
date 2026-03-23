@@ -69,17 +69,17 @@ func (l *lootTab) build() fyne.CanvasObject {
 				lb.SetText("")
 				return
 			}
-			e := l.entries[idx]
+			entry := l.entries[idx]
 			switch id.Col {
 			case 0:
-				lb.Importance = severityColors[e.Severity]
-				lb.SetText(e.Severity)
+				lb.Importance = severityColors[entry.Severity]
+				lb.SetText(entry.Severity)
 			case 1:
 				lb.Importance = widget.MediumImportance
-				lb.SetText(e.Title)
+				lb.SetText(entry.Title)
 			case 2:
 				lb.Importance = widget.LowImportance
-				lb.SetText(e.CreatedAt.Format("2006-01-02 15:04"))
+				lb.SetText(entry.CreatedAt.Format("2006-01-02 15:04"))
 			}
 		},
 	)
@@ -102,7 +102,7 @@ func (l *lootTab) build() fyne.CanvasObject {
 		l.notesArea.SetText(fmt.Sprintf("Severity: %s\nCreated: %s\n\n%s",
 			entry.Severity, entry.CreatedAt.Format("2006-01-02 15:04"), entry.Notes))
 
-		if entry.HistoryID != nil {
+		if entry.HistoryID != nil || entry.RawRequest != "" {
 			l.viewReqBtn.Enable()
 		} else {
 			l.viewReqBtn.Disable()
@@ -116,12 +116,12 @@ func (l *lootTab) build() fyne.CanvasObject {
 		if l.selectedIdx < 0 || l.selectedIdx >= len(l.entries) {
 			return
 		}
-		e := l.entries[l.selectedIdx]
-		dialog.ShowConfirm("Delete", fmt.Sprintf("Delete '%s'?", e.Title), func(ok bool) {
+		entry := l.entries[l.selectedIdx]
+		dialog.ShowConfirm("Delete", fmt.Sprintf("Delete '%s'?", entry.Title), func(ok bool) {
 			if !ok {
 				return
 			}
-			if err := l.projectStore.DeleteLoot(e.ID); err != nil {
+			if err := l.projectStore.DeleteLoot(entry.ID); err != nil {
 				logger.Error("loot: delete: %v", err)
 				return
 			}
@@ -134,7 +134,7 @@ func (l *lootTab) build() fyne.CanvasObject {
 	l.deleteBtn.Disable()
 
 	addBtn := widget.NewButtonWithIcon("Add", theme.ContentAddIcon(), func() {
-		l.showAddDialog(nil)
+		l.showAddDialog(nil, "", "")
 	})
 	addBtn.Importance = widget.HighImportance
 
@@ -146,11 +146,8 @@ func (l *lootTab) build() fyne.CanvasObject {
 		if l.selectedIdx < 0 || l.selectedIdx >= len(l.entries) {
 			return
 		}
-		e := l.entries[l.selectedIdx]
-		if e.HistoryID == nil {
-			return
-		}
-		l.showLinkedRequest(e)
+		entry := l.entries[l.selectedIdx]
+		l.showLinkedRequest(entry)
 	})
 	l.viewReqBtn.Disable()
 
@@ -179,7 +176,7 @@ func (l *lootTab) reload() {
 	l.table.Refresh()
 }
 
-func (l *lootTab) showAddDialog(historyID *uint64) {
+func (l *lootTab) showAddDialog(historyID *uint64, rawRequest string, rawResponse string) {
 	titleEntry := widget.NewEntry()
 	titleEntry.SetPlaceHolder("e.g. Admin credentials found")
 
@@ -206,10 +203,12 @@ func (l *lootTab) showAddDialog(historyID *uint64) {
 			return
 		}
 		entry := store.LootEntry{
-			Title:     title,
-			Severity:  severitySelect.Selected,
-			Notes:     notesEntry.Text,
-			HistoryID: historyID,
+			Title:       title,
+			Severity:    severitySelect.Selected,
+			Notes:       notesEntry.Text,
+			HistoryID:   historyID,
+			RawRequest:  rawRequest,
+			RawResponse: rawResponse,
 		}
 		if _, err := l.projectStore.AddLoot(entry); err != nil {
 			logger.Error("loot: add: %v", err)
@@ -251,7 +250,7 @@ func (l *lootTab) exportMarkdown() {
 	}
 
 	for _, entry := range entries {
-		entryData := entryData{
+		ed := entryData{
 			Severity: entry.Severity,
 			Title:    entry.Title,
 			Date:     entry.CreatedAt.Format("2006-01-02 15:04"),
@@ -260,11 +259,14 @@ func (l *lootTab) exportMarkdown() {
 		if entry.HistoryID != nil {
 			transaction, err := l.projectStore.GetTransaction(*entry.HistoryID)
 			if err == nil {
-				entryData.Request = formatRequest(*transaction)
-				entryData.Response = formatResponse(*transaction)
+				ed.Request = formatRequest(*transaction)
+				ed.Response = formatResponse(*transaction)
 			}
+		} else {
+			ed.Request = entry.RawRequest
+			ed.Response = entry.RawResponse
 		}
-		data.Entries = append(data.Entries, entryData)
+		data.Entries = append(data.Entries, ed)
 	}
 
 	tmpl, err := template.New("findings").Parse(assets.FindingsTemplate)
@@ -292,68 +294,103 @@ func (l *lootTab) exportMarkdown() {
 	}, l.win)
 	saveDialog.SetFileName(fmt.Sprintf("findings-%s.md", time.Now().Format("2006-01-02")))
 	saveDialog.Show()
-
 }
 
-func (l *lootTab) showLinkedRequest(e store.LootEntry) {
+func (l *lootTab) showLinkedRequest(entry store.LootEntry) {
+	if entry.HistoryID != nil {
+		l.showLinkedRequestFromHistory(entry)
+	} else {
+		l.showLinkedRequestFromRaw(entry)
+	}
+}
+
+func (l *lootTab) showLinkedRequestFromHistory(entry store.LootEntry) {
 	go func() {
-		transaction, err := l.projectStore.GetTransaction(*e.HistoryID)
+		transaction, err := l.projectStore.GetTransaction(*entry.HistoryID)
 		if err != nil {
 			logger.Error("loot: get linked request: %v", err)
 			return
 		}
 		fyne.Do(func() {
-			reqEntry := newReadOnlyEntry()
-			reqEntry.SetText(formatRequest(*transaction))
-
-			respEntry := newReadOnlyEntry()
-			respEntry.SetText(formatResponse(*transaction))
-
-			inspectBtn := widget.NewButtonWithIcon("Inspector", AppIcon("inspector"), func() {
-				showInspectorDialog(*transaction, l.win)
-			})
-
-			sendBtn := widget.NewButtonWithIcon("Send to Repeater", theme.MailForwardIcon(), nil)
-
-			reqPane := container.NewBorder(newBoldLabel("Request"), nil, nil, nil,
-				container.NewScroll(reqEntry))
-			respPane := container.NewBorder(
-				container.NewBorder(nil, nil, nil, inspectBtn, newBoldLabel("Response")),
-				nil, nil, nil,
-				container.NewScroll(respEntry))
-
-			split := container.NewHSplit(reqPane, respPane)
-			split.SetOffset(0.5)
-
-			linkedDialog := dialog.NewCustom(
+			l.showRequestResponseDialog(
 				fmt.Sprintf("Linked Request — %s %s", transaction.Method, transaction.URL),
-				"Close",
-				container.NewBorder(nil, sendBtn, nil, nil, split),
-				l.win,
+				formatRequest(*transaction),
+				formatResponse(*transaction),
+				transaction.Host,
+				transaction.TLS,
 			)
-
-			sendBtn.OnTapped = func() {
-				host, portStr, err := net.SplitHostPort(transaction.Host)
-				if err != nil {
-					host = transaction.Host
-					portStr = "443"
-					if !transaction.TLS {
-						portStr = "80"
-					}
-				}
-				port, _ := strconv.Atoi(portStr)
-				path := pathOf(transaction.URL)
-				if len(path) > 20 {
-					path = path[:20] + "..."
-				}
-				name := fmt.Sprintf("%s %s", transaction.Method, path)
-				l.repeater.AddTab(name, host, port, transaction.TLS, formatRequest(*transaction))
-				linkedDialog.Hide()
-			}
-
-			closeOnEscape(l.win, linkedDialog.Dismiss)
-			linkedDialog.Show()
-			linkedDialog.Resize(fyne.NewSize(900, 600))
 		})
 	}()
+}
+
+func (l *lootTab) showLinkedRequestFromRaw(entry store.LootEntry) {
+	host := parseHostFromRawString(entry.RawRequest)
+	_, _, useTLS := parseHostFromRaw(entry.RawRequest)
+	l.showRequestResponseDialog("Linked Request", entry.RawRequest, entry.RawResponse, host, useTLS)
+}
+
+func (l *lootTab) showRequestResponseDialog(title, rawRequest, rawResponse, host string, useTLS bool) {
+	reqEntry := newReadOnlyEntry()
+	reqEntry.SetText(rawRequest)
+
+	respEntry := newReadOnlyEntry()
+	respEntry.SetText(rawResponse)
+
+	sendBtn := widget.NewButtonWithIcon("Send to Repeater", theme.MailForwardIcon(), nil)
+
+	reqPane := container.NewBorder(newBoldLabel("Request"), nil, nil, nil,
+		container.NewScroll(reqEntry))
+	respPane := container.NewBorder(newBoldLabel("Response"), nil, nil, nil,
+		container.NewScroll(respEntry))
+
+	split := container.NewHSplit(reqPane, respPane)
+	split.SetOffset(0.5)
+
+	linkedDialog := dialog.NewCustom(
+		title,
+		"Close",
+		container.NewBorder(nil, sendBtn, nil, nil, split),
+		l.win,
+	)
+
+	sendBtn.OnTapped = func() {
+		hostOnly, portStr, err := net.SplitHostPort(host)
+		if err != nil {
+			hostOnly = host
+			portStr = "443"
+			if !useTLS {
+				portStr = "80"
+			}
+		}
+		port, _ := strconv.Atoi(portStr)
+		path := pathOf(extractURLFromRaw(rawRequest))
+		if len(path) > 20 {
+			path = path[:20] + "..."
+		}
+		name := fmt.Sprintf("%s %s", extractMethodFromRaw(rawRequest), path)
+		l.repeater.AddTab(name, hostOnly, port, useTLS, rawRequest)
+		linkedDialog.Hide()
+	}
+
+	closeOnEscape(l.win, linkedDialog.Dismiss)
+	linkedDialog.Show()
+	linkedDialog.Resize(fyne.NewSize(900, 600))
+}
+
+func extractURLFromRaw(rawRequest string) string {
+	firstLine := strings.SplitN(rawRequest, "\n", 2)[0]
+	parts := strings.Fields(firstLine)
+	if len(parts) >= 2 {
+		return parts[1]
+	}
+	return "/"
+}
+
+func extractMethodFromRaw(rawRequest string) string {
+	firstLine := strings.SplitN(rawRequest, "\n", 2)[0]
+	parts := strings.Fields(firstLine)
+	if len(parts) >= 1 {
+		return parts[0]
+	}
+	return "GET"
 }
