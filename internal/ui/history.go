@@ -286,7 +286,7 @@ func (h *historyTab) applyFilter() {
 			continue
 		}
 		if query != "" {
-			if !strings.Contains(strings.ToLower(tx.Host+tx.URL+tx.Method), query) {
+			if !strings.Contains(strings.ToLower(tx.Host+tx.URL+tx.Method+strconv.Itoa(tx.StatusCode)), query) {
 				continue
 			}
 		}
