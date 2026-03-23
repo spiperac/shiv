@@ -66,12 +66,12 @@ func showSettingsDialog(app fyne.App, _ fyne.Window, proxyServer *proxy.Proxy) {
 			return
 		}
 
-		currentSettings := store.LoadSettings()
-		currentSettings.ProxyHost = host
-		currentSettings.ProxyPort = port
-		currentSettings.ProxyEnabled = enabledCheck.Checked
+		updatedSettings := store.LoadSettings()
+		updatedSettings.ProxyHost = host
+		updatedSettings.ProxyPort = port
+		updatedSettings.ProxyEnabled = enabledCheck.Checked
 
-		if err := store.SaveSettings(currentSettings); err != nil {
+		if err := store.SaveSettings(updatedSettings); err != nil {
 			proxyStatus.SetText("Failed to save settings: " + err.Error())
 			logger.Error("settings: save: %v", err)
 			return
@@ -85,9 +85,13 @@ func showSettingsDialog(app fyne.App, _ fyne.Window, proxyServer *proxy.Proxy) {
 				return
 			}
 			proxyStatus.SetText(fmt.Sprintf("Proxy restarted on %s:%d", host, port))
+			proxyRunningBinding.Set(true)
+			proxyStatusBinding.Set(fmt.Sprintf("Proxy: running on %s:%d", host, port))
 		} else {
 			proxyServer.Stop()
 			proxyStatus.SetText("Proxy stopped.")
+			proxyRunningBinding.Set(false)
+			proxyStatusBinding.Set("Proxy: stopped")
 		}
 	})
 	saveBtn.Importance = widget.HighImportance
@@ -112,6 +116,11 @@ func showSettingsDialog(app fyne.App, _ fyne.Window, proxyServer *proxy.Proxy) {
 	settingsWin.Resize(fyne.NewSize(400, 350))
 	settingsWin.SetOnClosed(func() {
 		settingsWin = nil
+	})
+	settingsWin.Canvas().SetOnTypedKey(func(key *fyne.KeyEvent) {
+		if key.Name == fyne.KeyEscape {
+			settingsWin.Close()
+		}
 	})
 	settingsWin.Show()
 }

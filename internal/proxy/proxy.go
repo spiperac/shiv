@@ -38,6 +38,7 @@ func (p *Proxy) CA() *cert.CA {
 }
 
 func (p *Proxy) Start() error {
+	logger.Debug("proxy: Start() called, addr=%s", p.addr)
 	p.mu.Lock()
 	srv := &http.Server{
 		Addr:         p.addr,
@@ -54,6 +55,7 @@ func (p *Proxy) Start() error {
 }
 
 func (p *Proxy) Restart(newAddr string) error {
+	logger.Debug("proxy: Restart() called, newAddr=%s", newAddr)
 	p.mu.Lock()
 	srv := p.srv
 	p.mu.Unlock()
@@ -64,6 +66,9 @@ func (p *Proxy) Restart(newAddr string) error {
 		if err := srv.Shutdown(ctx); err != nil {
 			logger.Error("proxy: shutdown: %v", err)
 		}
+		p.mu.Lock()
+		p.srv = nil
+		p.mu.Unlock()
 	}
 
 	p.mu.Lock()
@@ -79,6 +84,7 @@ func (p *Proxy) Restart(newAddr string) error {
 }
 
 func (p *Proxy) Stop() {
+	logger.Debug("proxy: Stop() called")
 	p.mu.Lock()
 	srv := p.srv
 	p.mu.Unlock()
@@ -89,6 +95,9 @@ func (p *Proxy) Stop() {
 		if err := srv.Shutdown(ctx); err != nil {
 			logger.Error("proxy: shutdown: %v", err)
 		}
+		p.mu.Lock()
+		p.srv = nil
+		p.mu.Unlock()
 	}
 }
 
