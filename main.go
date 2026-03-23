@@ -4,6 +4,9 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"runtime"
+	"runtime/pprof"
+	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
@@ -18,8 +21,28 @@ import (
 
 func main() {
 	verbose := flag.Bool("verbose", false, "enable verbose debug logging")
+	profile := flag.Bool("profile", false, "enable memory profiling")
 	flag.Parse()
 
+	if *profile {
+		go func() {
+			for {
+				time.Sleep(30 * time.Second)
+				runtime.GC()
+				f, err := os.Create("heap.prof")
+				if err != nil {
+					println("err:", err.Error())
+					continue
+				}
+				pprof.WriteHeapProfile(f)
+				f.Close()
+
+				var m runtime.MemStats
+				runtime.ReadMemStats(&m)
+				println("heap:", m.HeapAlloc)
+			}
+		}()
+	}
 	logger.Init(*verbose)
 
 	fyneApp := app.NewWithID("io.shiv.proxy")

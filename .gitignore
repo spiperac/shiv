@@ -8,6 +8,9 @@
 *.so
 *.dylib
 
+# Profiler files
+heap.prof
+
 # Shiv binary and project files
 shiv
 *.shiv

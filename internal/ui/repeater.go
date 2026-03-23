@@ -43,32 +43,6 @@ func newRepeaterTab(projectStore *store.Store, win fyne.Window) *repeaterTab {
 	}
 }
 
-type repeaterEntry struct {
-	widget.Entry
-	onCtrlS func()
-}
-
-func newRepeaterEntry() *repeaterEntry {
-	e := &repeaterEntry{}
-	e.ExtendBaseWidget(e)
-	e.MultiLine = true
-	e.TextStyle = fyne.TextStyle{Monospace: true}
-	e.Wrapping = fyne.TextWrapBreak
-	return e
-}
-
-func (e *repeaterEntry) TypedShortcut(shortcut fyne.Shortcut) {
-	if customShortcut, ok := shortcut.(*desktop.CustomShortcut); ok {
-		if customShortcut.KeyName == fyne.KeyS && customShortcut.Modifier == fyne.KeyModifierControl {
-			if e.onCtrlS != nil {
-				e.onCtrlS()
-			}
-			return
-		}
-	}
-	e.Entry.TypedShortcut(shortcut)
-}
-
 func (r *repeaterTab) closeTab(closed *container.TabItem) {
 	if tabId, ok := r.tabIDs[closed]; ok {
 		logger.Info("repeater: OnClosed called, found=%v id=%d", ok, tabId)

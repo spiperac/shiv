@@ -24,12 +24,13 @@ type historyTab struct {
 	win          fyne.Window
 	repeater     *repeaterTab
 	loot         *lootTab
+	intruder     *intruderTab
 
 	mu       sync.RWMutex
 	rows     []store.Transaction
 	filtered []store.Transaction
 
-	table        *widget.Table
+	table        *tappableTable
 	filterEntry  *widget.Entry
 	showOutScope *widget.Check
 	reqLabel     *readOnlyEntry
@@ -43,8 +44,14 @@ type historyTab struct {
 var tableColumns = []string{"Method", "Host", "Path", "Status", "Size", "Duration"}
 var columnWidths = []float32{80, 200, 300, 70, 90, 90}
 
-func newHistoryTab(projectStore *store.Store, win fyne.Window, repeater *repeaterTab, loot *lootTab) *historyTab {
-	return &historyTab{projectStore: projectStore, win: win, repeater: repeater, loot: loot}
+func newHistoryTab(projectStore *store.Store, win fyne.Window, repeater *repeaterTab, loot *lootTab, intruder *intruderTab) *historyTab {
+	return &historyTab{
+		projectStore: projectStore,
+		win:          win,
+		repeater:     repeater,
+		loot:         loot,
+		intruder:     intruder,
+	}
 }
 
 func (h *historyTab) build() fyne.CanvasObject {
@@ -80,7 +87,11 @@ func (h *historyTab) build() fyne.CanvasObject {
 		h.filterEntry,
 	)
 
-	h.table = widget.NewTable(
+	h.reqLabel = newReadOnlyEntry()
+	h.respLabel = newReadOnlyEntry()
+
+	h.table = newTappableTable(
+		h.win,
 		func() (int, int) {
 			h.mu.RLock()
 			defer h.mu.RUnlock()
@@ -95,6 +106,7 @@ func (h *historyTab) build() fyne.CanvasObject {
 			label := obj.(*widget.Label)
 			if id.Row == 0 {
 				label.TextStyle = fyne.TextStyle{Bold: true}
+				label.Importance = widget.MediumImportance
 				label.SetText(tableColumns[id.Col])
 				return
 			}
@@ -107,8 +119,33 @@ func (h *historyTab) build() fyne.CanvasObject {
 				return
 			}
 			tx := h.filtered[idx]
+			isSelected := h.hasSelected && h.selectedTx.ID == tx.ID
 			h.mu.RUnlock()
 			label.SetText(h.cellText(tx, id.Col))
+			highlightTableRow(label, isSelected, widget.MediumImportance)
+		},
+		func() int {
+			if !h.hasSelected {
+				return -1
+			}
+			h.mu.RLock()
+			defer h.mu.RUnlock()
+			for i, tx := range h.filtered {
+				if tx.ID == h.selectedTx.ID {
+					return i
+				}
+			}
+			return -1
+		},
+		func(row int) []ContextMenuItem {
+			h.mu.RLock()
+			if row >= len(h.filtered) {
+				h.mu.RUnlock()
+				return nil
+			}
+			tx := h.filtered[row]
+			h.mu.RUnlock()
+			return h.contextMenuItems(tx)
 		},
 	)
 
@@ -132,6 +169,7 @@ func (h *historyTab) build() fyne.CanvasObject {
 
 		h.selectedTx = tx
 		h.hasSelected = true
+		h.table.Refresh()
 
 		go func() {
 			fullTx, err := h.projectStore.GetTransaction(tx.ID)
@@ -142,32 +180,15 @@ func (h *historyTab) build() fyne.CanvasObject {
 			fyne.Do(func() {
 				h.selectedTx = *fullTx
 				h.showDetail(*fullTx)
+				h.table.Refresh()
 			})
 		}()
 	}
-
-	h.reqLabel = newReadOnlyEntry()
-	h.respLabel = newReadOnlyEntry()
-
-	sendToRepeaterBtn := widget.NewButtonWithIcon("Send to Repeater", AppIcon("repeater"), func() {
-		if !h.hasSelected {
-			return
-		}
-		h.sendToRepeater(h.selectedTx)
-	})
 
 	h.win.Canvas().AddShortcut(&desktop.CustomShortcut{KeyName: fyne.KeyR, Modifier: fyne.KeyModifierControl}, func(_ fyne.Shortcut) {
 		if h.hasSelected {
 			h.sendToRepeater(h.selectedTx)
 		}
-	})
-
-	sendToLootBtn := widget.NewButtonWithIcon("Send to Loot", AppIcon("loot"), func() {
-		if !h.hasSelected {
-			return
-		}
-		id := h.selectedTx.ID
-		h.loot.showAddDialog(&id, "", "")
 	})
 
 	inspectBtn := widget.NewButtonWithIcon("Inspector", AppIcon("inspector"), func() {
@@ -178,13 +199,13 @@ func (h *historyTab) build() fyne.CanvasObject {
 	})
 
 	reqPane := container.NewBorder(
-		container.NewBorder(nil, nil, nil, sendToRepeaterBtn, newBoldLabel("Request")),
+		newBoldLabel("Request"),
 		nil, nil, nil,
 		container.NewScroll(h.reqLabel),
 	)
 
 	respPane := container.NewBorder(
-		container.NewBorder(nil, nil, nil, container.NewHBox(sendToLootBtn, inspectBtn), newBoldLabel("Response")),
+		container.NewBorder(nil, nil, nil, inspectBtn, newBoldLabel("Response")),
 		nil, nil, nil,
 		container.NewScroll(h.respLabel),
 	)
@@ -217,12 +238,73 @@ func (h *historyTab) build() fyne.CanvasObject {
 	return mainSplit
 }
 
+func (h *historyTab) contextMenuItems(tx store.Transaction) []ContextMenuItem {
+	return []ContextMenuItem{
+		{
+			Label: "Send to Repeater",
+			Action: func() {
+				h.sendToRepeater(tx)
+			},
+		},
+		{
+			Label: "Send to Intruder",
+			Action: func() {
+				h.sendToIntruder(tx)
+			},
+		},
+		{
+			Label: "Send to Loot",
+			Action: func() {
+				id := tx.ID
+				h.loot.showAddDialog(&id, "", "")
+			},
+		},
+		{
+			Label: "Copy URL",
+			Action: func() {
+				h.win.Clipboard().SetContent(tx.URL)
+			},
+		},
+		{
+			Label: "Copy Request",
+			Action: func() {
+				go func() {
+					fullTx, err := h.projectStore.GetTransaction(tx.ID)
+					if err != nil {
+						logger.Error("history: copy request: %v", err)
+						return
+					}
+					fyne.Do(func() {
+						h.win.Clipboard().SetContent(formatRequest(*fullTx))
+					})
+				}()
+			},
+		},
+		{
+			Label: "Copy Response",
+			Action: func() {
+				go func() {
+					fullTx, err := h.projectStore.GetTransaction(tx.ID)
+					if err != nil {
+						logger.Error("history: copy response: %v", err)
+						return
+					}
+					fyne.Do(func() {
+						h.win.Clipboard().SetContent(formatResponse(*fullTx))
+					})
+				}()
+			},
+		},
+	}
+}
+
 func (h *historyTab) sendToRepeater(tx store.Transaction) {
 	host, portStr, err := net.SplitHostPort(tx.Host)
 	if err != nil {
 		host = tx.Host
-		portStr = "443"
-		if !tx.TLS {
+		if tx.TLS {
+			portStr = "443"
+		} else {
 			portStr = "80"
 		}
 	}
@@ -233,6 +315,10 @@ func (h *historyTab) sendToRepeater(tx store.Transaction) {
 	}
 	name := fmt.Sprintf("%s %s", tx.Method, path)
 	h.repeater.AddTab(name, host, port, tx.TLS, formatRequest(tx))
+}
+
+func (h *historyTab) sendToIntruder(tx store.Transaction) {
+	h.intruder.reqEditor.SetText(formatRequest(tx))
 }
 
 func (h *historyTab) cellText(tx store.Transaction, col int) string {
