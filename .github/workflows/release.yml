@@ -30,3 +30,48 @@ jobs:
           asset_path: ./Shiv.tar.xz
           asset_name: Shiv-linux.tar.xz
           asset_content_type: application/x-xz
+
+  build-windows:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+      - name: Install MinGW
+        run: sudo apt-get update && sudo apt-get install -y gcc-mingw-w64-x86-64
+      - name: Install Fyne
+        run: go install fyne.io/tools/cmd/fyne@latest
+      - name: Package for Windows
+        run: |
+          export CC=x86_64-w64-mingw32-gcc
+          fyne package -os windows
+      - uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: ./Shiv.exe
+          asset_name: Shiv-windows.exe
+          asset_content_type: application/vnd.microsoft.portable-executable
+
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+      - name: Install Fyne
+        run: go install fyne.io/tools/cmd/fyne@latest
+      - name: Package for macOS
+        run: fyne package -os darwin
+      - name: Upload to release
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: ./Shiv.app
+          asset_name: Shiv-macos.app
+          asset_content_type: application/octet-stream
