@@ -262,7 +262,7 @@ func (h *historyTab) contextMenuItems(tx store.Transaction) []ContextMenuItem {
 		{
 			Label: "Copy URL",
 			Action: func() {
-				h.win.Clipboard().SetContent(tx.URL)
+				fyne.CurrentApp().Clipboard().SetContent(tx.URL)
 			},
 		},
 		{
@@ -275,7 +275,7 @@ func (h *historyTab) contextMenuItems(tx store.Transaction) []ContextMenuItem {
 						return
 					}
 					fyne.Do(func() {
-						h.win.Clipboard().SetContent(formatRequest(*fullTx))
+						fyne.CurrentApp().Clipboard().SetContent(formatRequest(*fullTx))
 					})
 				}()
 			},
@@ -290,7 +290,7 @@ func (h *historyTab) contextMenuItems(tx store.Transaction) []ContextMenuItem {
 						return
 					}
 					fyne.Do(func() {
-						h.win.Clipboard().SetContent(formatResponse(*fullTx))
+						fyne.CurrentApp().Clipboard().SetContent(formatResponse(*fullTx))
 					})
 				}()
 			},

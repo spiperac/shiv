@@ -33,12 +33,7 @@ func (t *interceptTab) build() fyne.CanvasObject {
 	t.toggle = widget.NewCheck("Intercept ON", func(on bool) {
 		t.projectStore.Intercept.SetEnabled(on)
 		if !on {
-			if t.pending != nil {
-				pending := t.pending
-				t.pending = nil
-				pending.Reply <- store.Decision{Forward: true, Request: pending.Request, Body: pending.Body}
-			}
-			t.clearEditor()
+			t.forwardAllPending()
 		}
 	})
 
@@ -76,15 +71,27 @@ func (t *interceptTab) watchQueue() {
 	for pending := range t.projectStore.Intercept.Queue() {
 		pendingRequest := pending
 		fyne.Do(func() {
+			// If a request is already waiting for a decision, forward it
+			// unmodified before replacing it with the new one. Without this
+			// the old proxy goroutine blocks forever on its Reply channel.
+			if t.pending != nil {
+				old := t.pending
+				t.pending = nil
+				old.Reply <- store.Decision{
+					Forward: true,
+					Request: old.Request,
+					Body:    old.Body,
+				}
+			}
 			t.showRequest(pendingRequest)
 		})
 	}
 }
 
-func (t *interceptTab) showRequest(pending *store.PendingRequest) {
-	t.pending = pending
+func (t *interceptTab) showRequest(p *store.PendingRequest) {
+	t.pending = p
 	t.editor.Enable()
-	t.editor.SetText(formatRawRequest(pending.Request, pending.Body))
+	t.editor.SetText(formatRawRequest(p.Request, p.Body))
 	t.forward.Enable()
 	t.drop.Enable()
 }
@@ -107,7 +114,28 @@ func (t *interceptTab) decide(forward bool) {
 		}
 		pending.Reply <- store.Decision{Forward: true, Request: req, Body: body}
 	} else {
-		pending.Reply <- store.Decision{Forward: false}
+		pending.Reply <- store.Decision{Forward: false, Request: pending.Request, Body: pending.Body}
+	}
+}
+
+// forwardAllPending forwards the currently displayed request (if any) and
+// drains the queue, forwarding every queued request unmodified. Called when
+// the user turns intercept off so no proxy goroutines are left blocked.
+func (t *interceptTab) forwardAllPending() {
+	if t.pending != nil {
+		old := t.pending
+		t.pending = nil
+		old.Reply <- store.Decision{Forward: true, Request: old.Request, Body: old.Body}
+	}
+	t.clearEditor()
+
+	for {
+		select {
+		case queued := <-t.projectStore.Intercept.Queue():
+			queued.Reply <- store.Decision{Forward: true, Request: queued.Request, Body: queued.Body}
+		default:
+			return
+		}
 	}
 }
 
