@@ -66,12 +66,14 @@ jobs:
         run: go install fyne.io/tools/cmd/fyne@latest
       - name: Package for macOS
         run: fyne package -os darwin
+      - name: Zip the app
+        run: zip -r Shiv-macos.zip Shiv.app
       - name: Upload to release
         uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ github.event.release.upload_url }}
-          asset_path: ./Shiv.app
-          asset_name: Shiv-macos.app
-          asset_content_type: application/octet-stream
+          asset_path: ./Shiv-macos.zip
+          asset_name: Shiv-macos.zip
+          asset_content_type: application/zip
