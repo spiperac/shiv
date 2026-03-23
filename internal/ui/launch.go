@@ -45,7 +45,7 @@ func ShowLaunchScreen(app fyne.App, onSelect func(projectPath string, w fyne.Win
 					widget.NewLabel("date"),
 				),
 				layout.NewSpacer(),
-				widget.NewButtonWithIcon("Delete", AppIcon("delete"), nil),
+				widget.NewButtonWithIcon("", AppIcon("delete"), nil),
 			)
 		},
 		func(i widget.ListItemID, obj fyne.CanvasObject) {

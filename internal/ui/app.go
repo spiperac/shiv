@@ -26,6 +26,9 @@ func ShowMainWindow(app fyne.App, st *store.Store, p *proxy.Proxy, ps store.Prox
 		app.Settings().SetTheme(NewVagueTheme(dark))
 	}
 
+	settingsBtn := widget.NewButtonWithIcon("", AppIcon("settings"), func() {
+		showSettingsDialog(app, w, st, p)
+	})
 	logo := canvas.NewImageFromResource(fyne.NewStaticResource("logo.png", assets.Logo))
 	logo.FillMode = canvas.ImageFillContain
 	logo.SetMinSize(fyne.NewSize(24, 24))
@@ -35,7 +38,7 @@ func ShowMainWindow(app fyne.App, st *store.Store, p *proxy.Proxy, ps store.Prox
 
 	functionBar := container.NewBorder(nil, nil,
 		container.NewHBox(logo, appName),
-		toggleBtn,
+		container.NewHBox(settingsBtn, toggleBtn),
 		layout.NewSpacer(),
 	)
 
@@ -50,7 +53,6 @@ func ShowMainWindow(app fyne.App, st *store.Store, p *proxy.Proxy, ps store.Prox
 		container.NewTabItemWithIcon("Intercept", AppIcon("intercept"), interceptTab),
 		container.NewTabItemWithIcon("Repeater", AppIcon("repeater"), repeater.build()),
 		container.NewTabItemWithIcon("Loot", AppIcon("loot"), lootContent),
-		container.NewTabItemWithIcon("Settings", AppIcon("settings"), newSettingsTab(w, st, p, ps)),
 	)
 	tabs.SetTabLocation(container.TabLocationTop)
 

@@ -14,8 +14,14 @@ import (
 	"github.com/shiv/internal/store"
 )
 
-func newSettingsTab(win fyne.Window, st *store.Store, p *proxy.Proxy, ps store.ProxySettings) fyne.CanvasObject {
-	// CA section.
+var settingsWin fyne.Window
+
+func showSettingsDialog(app fyne.App, _ fyne.Window, st *store.Store, p *proxy.Proxy) {
+	ps := st.LoadProxySettings()
+	if settingsWin != nil {
+		settingsWin.RequestFocus()
+		return
+	}
 	caStatus := widget.NewLabel("")
 	caStatus.Wrapping = fyne.TextWrapBreak
 
@@ -52,8 +58,7 @@ func newSettingsTab(win fyne.Window, st *store.Store, p *proxy.Proxy, ps store.P
 
 	saveBtn := widget.NewButton("Save & Restart Proxy", func() {
 		host := hostEntry.Text
-		portStr := portEntry.Text
-		port, err := strconv.Atoi(portStr)
+		port, err := strconv.Atoi(portEntry.Text)
 		if err != nil || port < 1 || port > 65535 {
 			proxyStatus.SetText("Invalid port number.")
 			return
@@ -86,8 +91,7 @@ func newSettingsTab(win fyne.Window, st *store.Store, p *proxy.Proxy, ps store.P
 	})
 	saveBtn.Importance = widget.HighImportance
 
-	return container.NewVBox(
-		widget.NewSeparator(),
+	content := container.NewVBox(
 		newBoldLabel("CA Certificate"),
 		installBtn,
 		caStatus,
@@ -101,4 +105,12 @@ func newSettingsTab(win fyne.Window, st *store.Store, p *proxy.Proxy, ps store.P
 		saveBtn,
 		proxyStatus,
 	)
+
+	settingsWin = app.NewWindow("Settings")
+	settingsWin.SetContent(container.NewPadded(content))
+	settingsWin.Resize(fyne.NewSize(400, 350))
+	settingsWin.SetOnClosed(func() {
+		settingsWin = nil
+	})
+	settingsWin.Show()
 }
