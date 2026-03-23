@@ -47,18 +47,18 @@ func (s *Store) Close() error {
 }
 
 func (s *Store) write(writeFunc func() error) error {
-	errCh := make(chan error, 1)
+	errorChan := make(chan error, 1)
 	select {
 	case s.writeCh <- func() error {
 		err := writeFunc()
-		errCh <- err
+		errorChan <- err
 		return err
 	}:
 	case <-s.done:
 		return fmt.Errorf("store: closed")
 	}
 	select {
-	case err := <-errCh:
+	case err := <-errorChan:
 		return err
 	case <-s.done:
 		return fmt.Errorf("store: closed")
@@ -71,7 +71,6 @@ func (s *Store) writeLoop() {
 		case writeFunc := <-s.writeCh:
 			writeFunc()
 		case <-s.done:
-			// Drain remaining writes before exit.
 			for {
 				select {
 				case fn := <-s.writeCh:
@@ -144,4 +143,14 @@ CREATE TABLE IF NOT EXISTS scope (
 	host TEXT NOT NULL UNIQUE
 );
 
+CREATE TABLE IF NOT EXISTS intruder_config (
+	id               INTEGER PRIMARY KEY,
+	delay_ms         INTEGER DEFAULT 0,
+	stop_on_status   INTEGER DEFAULT 0,
+	max_redirects    INTEGER DEFAULT 10,
+	follow_redirects TEXT    DEFAULT 'never',
+	timeout_ms       INTEGER DEFAULT 30000,
+	raw_request      TEXT    DEFAULT '',
+	payloads         TEXT    DEFAULT ''
+);
 `

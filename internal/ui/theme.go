@@ -44,6 +44,8 @@ func AppIcon(name string) fyne.Resource {
 		return fyne.NewStaticResource("boomerang.png", assets.IconRepeater)
 	case "inspector":
 		return fyne.NewStaticResource("inspector.png", assets.IconInspector)
+	case "intruder":
+		return fyne.NewStaticResource("intruder.png", assets.IconIntruder)
 	case "intercept":
 		return fyne.NewStaticResource("intercept.png", assets.IconIntercept)
 	case "loot":

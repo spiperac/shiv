@@ -102,11 +102,13 @@ func ShowMainWindow(app fyne.App, projectStore *store.Store, proxyServer *proxy.
 	historyTab := newHistoryTab(projectStore, mainWin, repeater, loot)
 	interceptTab := newInterceptTab(projectStore)
 	lootContent := loot.build()
+	intruderTab := newIntruderTab(mainWin, projectStore)
 
 	tabs := container.NewAppTabs(
 		container.NewTabItemWithIcon("History", AppIcon("history"), historyTab),
 		container.NewTabItemWithIcon("Intercept", AppIcon("intercept"), interceptTab),
 		container.NewTabItemWithIcon("Repeater", AppIcon("repeater"), repeater.build()),
+		container.NewTabItemWithIcon("Intruder", AppIcon("intruder"), intruderTab),
 		container.NewTabItemWithIcon("Loot", AppIcon("loot"), lootContent),
 	)
 	tabs.SetTabLocation(container.TabLocationTop)

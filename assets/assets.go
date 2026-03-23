@@ -17,6 +17,9 @@ var IconHistory []byte
 //go:embed icons/inspector.png
 var IconInspector []byte
 
+//go:embed icons/intruder.png
+var IconIntruder []byte
+
 //go:embed icons/boomerang.png
 var IconRepeater []byte
 
