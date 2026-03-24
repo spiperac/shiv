@@ -25,6 +25,22 @@ func (t *vagueTheme) Color(name fyne.ThemeColorName, variant fyne.ThemeVariant) 
 }
 
 func (t *vagueTheme) Font(style fyne.TextStyle) fyne.Resource {
+	defer func() {
+		if r := recover(); r != nil {
+			// fallback to default theme in case of missing font
+			return
+		}
+	}()
+	switch {
+	case style.Bold && style.Italic:
+		return fyne.NewStaticResource("JetBrainsMono-BoldItalic.ttf", assets.FontJetBrainsMonoBold)
+	case style.Bold:
+		return fyne.NewStaticResource("JetBrainsMono-Bold.ttf", assets.FontJetBrainsMonoBold)
+	case style.Italic:
+		return fyne.NewStaticResource("JetBrainsMono-Italic.ttf", assets.FontJetBrainsMonoItalic)
+	default:
+		return fyne.NewStaticResource("JetBrainsMono-Regular.ttf", assets.FontJetBrainsMonoRegular)
+	}
 	return theme.DefaultTheme().Font(style)
 }
 

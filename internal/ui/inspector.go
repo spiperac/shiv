@@ -17,14 +17,14 @@ import (
 func showInspectorDialog(tx store.Transaction, win fyne.Window) {
 	tabs := container.NewAppTabs()
 
+	// Headers tab
+	headers := buildHeadersList(tx.RespHeaders)
+	tabs.Append(container.NewTabItem("Headers", headers))
+
 	// Cookies tab
 	cookies := parseCookies(tx.RespHeaders)
 	cookieContent := buildKVTable(cookies)
 	tabs.Append(container.NewTabItem("Cookies", cookieContent))
-
-	// Headers tab
-	headers := buildHeadersList(tx.RespHeaders)
-	tabs.Append(container.NewTabItem("Headers", headers))
 
 	// JSON tab if applicable
 	contentType := tx.RespHeaders.Get("Content-Type")
@@ -53,7 +53,7 @@ func parseCookies(headers http.Header) [][2]string {
 		}
 		// also parse attributes
 		if len(parts) > 1 {
-			for _, attr := range strings.Split(parts[1], ";") {
+			for attr := range strings.SplitSeq(parts[1], ";") {
 				attr = strings.TrimSpace(attr)
 				if attr == "" {
 					continue

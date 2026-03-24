@@ -40,3 +40,12 @@ var IconSettings []byte
 
 //go:embed findings.md.tmpl
 var FindingsTemplate string
+
+//go:embed fonts/JetBrainsMono-Regular.ttf
+var FontJetBrainsMonoRegular []byte
+
+//go:embed fonts/JetBrainsMono-Bold.ttf
+var FontJetBrainsMonoBold []byte
+
+//go:embed fonts/JetBrainsMono-Italic.ttf
+var FontJetBrainsMonoItalic []byte
