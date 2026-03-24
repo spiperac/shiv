@@ -17,6 +17,7 @@ import (
 
 	"github.com/shiv/internal/logger"
 	"github.com/shiv/internal/store"
+	"github.com/shiv/internal/ui/widgets"
 )
 
 type historyTab struct {
@@ -30,18 +31,18 @@ type historyTab struct {
 	rows     []store.Transaction
 	filtered []store.Transaction
 
-	table        *DataTable
+	table        *widgets.DataTable
 	filterEntry  *widget.Entry
 	showOutScope *widget.Check
-	reqLabel     *readOnlyEntry
-	respLabel    *readOnlyEntry
+	reqLabel     *widgets.TextView
+	respLabel    *widgets.TextView
 	scopeBtn     *widget.Button
 
 	selectedTx  store.Transaction
 	hasSelected bool
 }
 
-var tableColumns = []DataTableColumn{
+var tableColumns = []widgets.DataTableColumn{
 	{Header: "Method", Width: 80},
 	{Header: "Host", Width: 200},
 	{Header: "Path", Width: 300},
@@ -93,10 +94,12 @@ func (h *historyTab) build() fyne.CanvasObject {
 		h.filterEntry,
 	)
 
-	h.reqLabel = newReadOnlyEntry()
-	h.respLabel = newReadOnlyEntry()
+	h.reqLabel = widgets.NewTextView()
+	h.reqLabel.SetWindow(h.win)
+	h.respLabel = widgets.NewTextView()
+	h.respLabel.SetWindow(h.win)
 
-	h.table = NewDataTable()
+	h.table = widgets.NewDataTable()
 	h.table.SetWindow(h.win)
 	h.table.Columns = tableColumns
 	h.table.RowCount = func() int {
@@ -113,30 +116,33 @@ func (h *historyTab) build() fyne.CanvasObject {
 		return h.cellText(h.filtered[row], col)
 	}
 	h.table.CellStyle = func(row, col int) widget.Importance {
-		// all history cells use default importance; colour is handled by
-		// the selection highlight instead
-		// only colour the Status column (col 3)
-		if col != 3 {
-			return widget.MediumImportance
-		}
 		h.mu.RLock()
 		defer h.mu.RUnlock()
 		if row >= len(h.filtered) {
 			return widget.MediumImportance
 		}
-		status := h.filtered[row].StatusCode
-		switch {
-		case status >= 500:
-			return widget.DangerImportance
-		case status >= 400:
-			return widget.WarningImportance
-		case status >= 300:
-			return widget.LowImportance
-		case status >= 200:
-			return widget.SuccessImportance
-		default:
-			return widget.MediumImportance
+		tx := h.filtered[row]
+		switch col {
+		case 0: // Method
+			switch tx.Method {
+			case "POST", "PUT", "PATCH", "DELETE":
+				return widget.WarningImportance
+			default:
+				return widget.MediumImportance
+			}
+		case 3: // Status
+			switch {
+			case tx.StatusCode >= 500:
+				return widget.DangerImportance
+			case tx.StatusCode >= 400:
+				return widget.WarningImportance
+			case tx.StatusCode >= 300:
+				return widget.LowImportance
+			case tx.StatusCode >= 200:
+				return widget.SuccessImportance
+			}
 		}
+		return widget.MediumImportance
 	}
 	h.table.RowID = func(row int) int64 {
 		h.mu.RLock()
@@ -170,7 +176,7 @@ func (h *historyTab) build() fyne.CanvasObject {
 			})
 		}()
 	}
-	h.table.MenuItems = func(row int) []ContextMenuItem {
+	h.table.MenuItems = func(row int) []widgets.ContextMenuItem {
 		h.mu.RLock()
 		if row >= len(h.filtered) {
 			h.mu.RUnlock()
@@ -199,13 +205,13 @@ func (h *historyTab) build() fyne.CanvasObject {
 	reqPane := container.NewBorder(
 		newBoldLabel("Request"),
 		nil, nil, nil,
-		container.NewScroll(h.reqLabel),
+		h.reqLabel.Build(),
 	)
 
 	respPane := container.NewBorder(
 		container.NewBorder(nil, nil, nil, inspectBtn, newBoldLabel("Response")),
 		nil, nil, nil,
-		container.NewScroll(h.respLabel),
+		h.respLabel.Build(),
 	)
 
 	detailSplit := container.NewHSplit(reqPane, respPane)
@@ -236,8 +242,8 @@ func (h *historyTab) build() fyne.CanvasObject {
 	return mainSplit
 }
 
-func (h *historyTab) contextMenuItems(tx store.Transaction) []ContextMenuItem {
-	return []ContextMenuItem{
+func (h *historyTab) contextMenuItems(tx store.Transaction) []widgets.ContextMenuItem {
+	return []widgets.ContextMenuItem{
 		{
 			Label: "Send to Repeater",
 			Action: func() {

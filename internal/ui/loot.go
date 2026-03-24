@@ -17,6 +17,7 @@ import (
 	"github.com/shiv/assets"
 	"github.com/shiv/internal/logger"
 	"github.com/shiv/internal/store"
+	"github.com/shiv/internal/ui/widgets"
 )
 
 var severities = []string{"Critical", "High", "Medium", "Low", "Info"}
@@ -35,8 +36,8 @@ type lootTab struct {
 	repeater     *repeaterTab
 	entries      []store.LootEntry
 
-	table      *DataTable
-	notesArea  *readOnlyEntry
+	table      *widgets.DataTable
+	notesArea  *widgets.TextView
 	viewReqBtn *widget.Button
 	deleteBtn  *widget.Button
 	exportBtn  *widget.Button
@@ -44,7 +45,7 @@ type lootTab struct {
 	selectedIdx int
 }
 
-var lootColumns = []DataTableColumn{
+var lootColumns = []widgets.DataTableColumn{
 	{Header: "Severity", Width: 300},
 	{Header: "Title", Width: 500},
 	{Header: "Created", Width: 360},
@@ -60,7 +61,7 @@ func newLootTab(projectStore *store.Store, win fyne.Window, repeater *repeaterTa
 }
 
 func (l *lootTab) build() fyne.CanvasObject {
-	l.table = NewDataTable()
+	l.table = widgets.NewDataTable()
 	l.table.SetWindow(l.win)
 	l.table.Columns = lootColumns
 	l.table.RowCount = func() int {
@@ -111,12 +112,12 @@ func (l *lootTab) build() fyne.CanvasObject {
 			l.viewReqBtn.Disable()
 		}
 	}
-	l.table.MenuItems = func(row int) []ContextMenuItem {
+	l.table.MenuItems = func(row int) []widgets.ContextMenuItem {
 		if row >= len(l.entries) {
 			return nil
 		}
 		entry := l.entries[row]
-		return []ContextMenuItem{
+		return []widgets.ContextMenuItem{
 			{
 				Label: "Delete",
 				Action: func() {
@@ -148,7 +149,8 @@ func (l *lootTab) build() fyne.CanvasObject {
 
 	tableObj := l.table.Build()
 
-	l.notesArea = newReadOnlyEntry()
+	l.notesArea = widgets.NewTextView()
+	l.notesArea.SetWindow(l.win)
 	l.notesArea.SetPlaceHolder("Select an entry to view details...")
 
 	l.deleteBtn = widget.NewButtonWithIcon("Delete", theme.DeleteIcon(), func() {
@@ -192,7 +194,7 @@ func (l *lootTab) build() fyne.CanvasObject {
 	toolbar := container.NewHBox(addBtn, l.deleteBtn, l.viewReqBtn, l.exportBtn)
 
 	notesPane := container.NewBorder(newBoldLabel("Notes"), nil, nil, nil,
-		container.NewScroll(l.notesArea))
+		l.notesArea.Build())
 
 	split := container.NewVSplit(
 		container.NewBorder(toolbar, nil, nil, nil, tableObj),
@@ -368,18 +370,20 @@ func (l *lootTab) showLinkedRequestFromRaw(entry store.LootEntry) {
 }
 
 func (l *lootTab) showRequestResponseDialog(title, rawRequest, rawResponse, host string, useTLS bool) {
-	reqEntry := newReadOnlyEntry()
+	reqEntry := widgets.NewTextView()
+	reqEntry.SetWindow(l.win)
 	reqEntry.SetText(rawRequest)
 
-	respEntry := newReadOnlyEntry()
+	respEntry := widgets.NewTextView()
+	respEntry.SetWindow(l.win)
 	respEntry.SetText(rawResponse)
 
 	sendBtn := widget.NewButtonWithIcon("Send to Repeater", theme.MailForwardIcon(), nil)
 
 	reqPane := container.NewBorder(newBoldLabel("Request"), nil, nil, nil,
-		container.NewScroll(reqEntry))
+		reqEntry.Build())
 	respPane := container.NewBorder(newBoldLabel("Response"), nil, nil, nil,
-		container.NewScroll(respEntry))
+		respEntry.Build())
 
 	split := container.NewHSplit(reqPane, respPane)
 	split.SetOffset(0.5)

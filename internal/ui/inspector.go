@@ -11,6 +11,7 @@ import (
 	"fyne.io/fyne/v2/widget"
 
 	"github.com/shiv/internal/store"
+	"github.com/shiv/internal/ui/widgets"
 )
 
 func showInspectorDialog(tx store.Transaction, win fyne.Window) {
@@ -28,9 +29,9 @@ func showInspectorDialog(tx store.Transaction, win fyne.Window) {
 	// JSON tab if applicable
 	contentType := tx.RespHeaders.Get("Content-Type")
 	if strings.Contains(contentType, "application/json") && len(tx.RespBody) > 0 {
-		jsonEntry := newReadOnlyEntry()
+		jsonEntry := widgets.NewTextView()
 		jsonEntry.SetText(string(prettyJSON(tx.RespBody)))
-		tabs.Append(container.NewTabItem("JSON", container.NewScroll(jsonEntry)))
+		tabs.Append(container.NewTabItem("JSON", jsonEntry.Build()))
 	}
 
 	inspectorDialog := dialog.NewCustom("Inspector", "Close", tabs, win)

@@ -18,6 +18,7 @@ import (
 	"fyne.io/fyne/v2/widget"
 
 	"github.com/shiv/internal/store"
+	"github.com/shiv/internal/ui/widgets"
 )
 
 var intruderMarkerRegex = regexp.MustCompile(`\$<[^>]+>`)
@@ -44,8 +45,8 @@ type intruderTab struct {
 	startBtn      *widget.Button
 	stopBtn       *widget.Button
 	progressLabel *widget.Label
-	responsePane  *readOnlyEntry
-	requestPane   *readOnlyEntry
+	responsePane  *widgets.TextView
+	requestPane   *widgets.TextView
 
 	sendToRepeaterBtn *widget.Button
 	sendToLootBtn     *widget.Button
@@ -58,7 +59,7 @@ type intruderTab struct {
 	results  []intruderResult
 	filtered []intruderResult
 
-	table *DataTable
+	table *widgets.DataTable
 
 	running  atomic.Bool
 	stopChan chan struct{}
@@ -74,7 +75,7 @@ func newIntruderTab(win fyne.Window, projectStore *store.Store, repeater *repeat
 	}
 }
 
-var intruderColumns = []DataTableColumn{
+var intruderColumns = []widgets.DataTableColumn{
 	{Header: "Payload", Width: 200},
 	{Header: "Status", Width: 80},
 	{Header: "Size", Width: 100},
@@ -230,14 +231,16 @@ func (t *intruderTab) build() fyne.CanvasObject {
 	})
 	t.sendToLootBtn.Disable()
 
-	t.responsePane = newReadOnlyEntry()
+	t.responsePane = widgets.NewTextView()
+	t.responsePane.SetWindow(t.win)
 	t.responsePane.SetPlaceHolder("Select a result to view response...")
 
-	t.requestPane = newReadOnlyEntry()
+	t.requestPane = widgets.NewTextView()
+	t.requestPane.SetWindow(t.win)
 	t.requestPane.SetPlaceHolder("Select a result to view request...")
 
 	// ── DataTable for results ─────────────────────────────────
-	t.table = NewDataTable()
+	t.table = widgets.NewDataTable()
 	t.table.SetWindow(t.win)
 	t.table.Columns = intruderColumns
 	t.table.RowCount = func() int {
@@ -332,13 +335,13 @@ func (t *intruderTab) build() fyne.CanvasObject {
 	respPane := container.NewBorder(
 		container.NewBorder(nil, nil, nil, t.sendToLootBtn, newBoldLabel("Response")),
 		nil, nil, nil,
-		container.NewScroll(t.responsePane),
+		t.responsePane.Build(),
 	)
 
 	requestPane := container.NewBorder(
 		container.NewBorder(nil, nil, nil, t.sendToRepeaterBtn, newBoldLabel("Request")),
 		nil, nil, nil,
-		container.NewScroll(t.requestPane),
+		t.requestPane.Build(),
 	)
 
 	detailPane := container.NewHSplit(respPane, requestPane)

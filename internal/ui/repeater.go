@@ -23,6 +23,7 @@ import (
 	"github.com/andybalholm/brotli"
 	"github.com/shiv/internal/logger"
 	"github.com/shiv/internal/store"
+	"github.com/shiv/internal/ui/widgets"
 )
 
 type repeaterTab struct {
@@ -131,7 +132,8 @@ func (r *repeaterTab) buildTabItem(tab store.RepeaterTab) *container.TabItem {
 	reqEditor.SetPlaceHolder("Paste or edit raw HTTP request here...")
 	reqEditor.SetText(tab.RawRequest)
 
-	respLabel := newReadOnlyEntry()
+	respLabel := widgets.NewTextView()
+	respLabel.SetWindow(r.win)
 
 	sendBtn := widget.NewButtonWithIcon("Send", theme.MailSendIcon(), nil)
 	sendBtn.Importance = widget.HighImportance
@@ -183,7 +185,7 @@ func (r *repeaterTab) buildTabItem(tab store.RepeaterTab) *container.TabItem {
 					inspectBtn.Enable()
 					sendToLootBtn.Enable()
 				}
-				if saveErr := r.projectStore.UpdateRepeaterTab(tabID, rawReq, respLabel.Text); saveErr != nil {
+				if saveErr := r.projectStore.UpdateRepeaterTab(tabID, rawReq, respLabel.GetText()); saveErr != nil {
 					logger.Error("repeater: update tab: %v", saveErr)
 				}
 			})
@@ -223,7 +225,7 @@ func (r *repeaterTab) buildTabItem(tab store.RepeaterTab) *container.TabItem {
 			newBoldLabel("Response"),
 		),
 		nil, nil, nil,
-		container.NewScroll(respLabel))
+		respLabel.Build())
 
 	split := container.NewHSplit(reqPane, respPane)
 	split.SetOffset(0.5)
@@ -387,4 +389,30 @@ func parseHostFromRaw(raw string) (host string, port int, useTLS bool) {
 		}
 	}
 	return "", 0, false
+}
+
+type repeaterEntry struct {
+	widget.Entry
+	onCtrlS func()
+}
+
+func newRepeaterEntry() *repeaterEntry {
+	e := &repeaterEntry{}
+	e.ExtendBaseWidget(e)
+	e.MultiLine = true
+	e.TextStyle = fyne.TextStyle{Monospace: true}
+	e.Wrapping = fyne.TextWrapBreak
+	return e
+}
+
+func (e *repeaterEntry) TypedShortcut(shortcut fyne.Shortcut) {
+	if cs, ok := shortcut.(*desktop.CustomShortcut); ok {
+		if cs.KeyName == fyne.KeyS && cs.Modifier == fyne.KeyModifierControl {
+			if e.onCtrlS != nil {
+				e.onCtrlS()
+			}
+			return
+		}
+	}
+	e.Entry.TypedShortcut(shortcut)
 }
