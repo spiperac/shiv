@@ -366,6 +366,7 @@ func (h *historyTab) showDetail(tx store.Transaction) {
 func (h *historyTab) applyFilter() {
 	query := strings.ToLower(h.filterEntry.Text)
 	showOut := h.showOutScope.Checked
+	terms := strings.Fields(query)
 
 	var filtered []store.Transaction
 	h.mu.RLock()
@@ -373,9 +374,16 @@ func (h *historyTab) applyFilter() {
 		if !showOut && !tx.InScope {
 			continue
 		}
-		if query != "" {
+		if len(terms) > 0 {
 			searchable := strings.ToLower(tx.Host + tx.URL + tx.Method + strconv.Itoa(tx.StatusCode))
-			if !strings.Contains(searchable, query) {
+			match := true
+			for _, term := range terms {
+				if !strings.Contains(searchable, term) {
+					match = false
+					break
+				}
+			}
+			if !match {
 				continue
 			}
 		}
@@ -386,7 +394,6 @@ func (h *historyTab) applyFilter() {
 	h.mu.Lock()
 	h.filtered = filtered
 	h.mu.Unlock()
-
 	h.table.Refresh()
 }
 
