@@ -21,7 +21,7 @@ import (
 
 var severities = []string{"Critical", "High", "Medium", "Low", "Info"}
 
-var severityColors = map[string]widget.Importance{
+var severityImportance = map[string]widget.Importance{
 	"Critical": widget.DangerImportance,
 	"High":     widget.DangerImportance,
 	"Medium":   widget.WarningImportance,
@@ -35,7 +35,7 @@ type lootTab struct {
 	repeater     *repeaterTab
 	entries      []store.LootEntry
 
-	table      *widget.Table
+	table      *DataTable
 	notesArea  *readOnlyEntry
 	viewReqBtn *widget.Button
 	deleteBtn  *widget.Button
@@ -44,8 +44,11 @@ type lootTab struct {
 	selectedIdx int
 }
 
-var lootColumns = []string{"Severity", "Title", "Created"}
-var lootColumnWidths = []float32{300, 500, 360}
+var lootColumns = []DataTableColumn{
+	{Header: "Severity", Width: 300},
+	{Header: "Title", Width: 500},
+	{Header: "Created", Width: 360},
+}
 
 func newLootTab(projectStore *store.Store, win fyne.Window, repeater *repeaterTab) *lootTab {
 	return &lootTab{
@@ -57,66 +60,93 @@ func newLootTab(projectStore *store.Store, win fyne.Window, repeater *repeaterTa
 }
 
 func (l *lootTab) build() fyne.CanvasObject {
-	l.table = widget.NewTable(
-		func() (int, int) { return len(l.entries) + 1, len(lootColumns) },
-		func() fyne.CanvasObject {
-			label := widget.NewLabel("")
-			label.Truncation = fyne.TextTruncateEllipsis
-			return label
-		},
-		func(id widget.TableCellID, obj fyne.CanvasObject) {
-			lb := obj.(*widget.Label)
-			if id.Row == 0 {
-				lb.TextStyle = fyne.TextStyle{Bold: true}
-				lb.Importance = widget.MediumImportance
-				lb.SetText(lootColumns[id.Col])
-				return
-			}
-			lb.TextStyle = fyne.TextStyle{}
-			idx := id.Row - 1
-			if idx >= len(l.entries) {
-				lb.SetText("")
-				return
-			}
-			entry := l.entries[idx]
-			switch id.Col {
-			case 0:
-				lb.Importance = severityColors[entry.Severity]
-				lb.SetText(entry.Severity)
-			case 1:
-				lb.Importance = widget.MediumImportance
-				lb.SetText(entry.Title)
-			case 2:
-				lb.Importance = widget.LowImportance
-				lb.SetText(entry.CreatedAt.Format("2006-01-02 15:04"))
-			}
-		},
-	)
-	for i, colWidth := range lootColumnWidths {
-		l.table.SetColumnWidth(i, colWidth)
+	l.table = NewDataTable()
+	l.table.SetWindow(l.win)
+	l.table.Columns = lootColumns
+	l.table.RowCount = func() int {
+		return len(l.entries)
 	}
-
-	l.table.OnSelected = func(id widget.TableCellID) {
-		if id.Row == 0 {
-			l.table.UnselectAll()
+	l.table.CellValue = func(row, col int) string {
+		if row >= len(l.entries) {
+			return ""
+		}
+		entry := l.entries[row]
+		switch col {
+		case 0:
+			return entry.Severity
+		case 1:
+			return entry.Title
+		case 2:
+			return entry.CreatedAt.Format("2006-01-02 15:04")
+		}
+		return ""
+	}
+	l.table.CellStyle = func(row, col int) widget.Importance {
+		if col != 0 || row >= len(l.entries) {
+			return widget.MediumImportance
+		}
+		if imp, ok := severityImportance[l.entries[row].Severity]; ok {
+			return imp
+		}
+		return widget.MediumImportance
+	}
+	l.table.RowID = func(row int) int64 {
+		if row >= len(l.entries) {
+			return 0
+		}
+		return int64(l.entries[row].ID)
+	}
+	l.table.OnSelect = func(row int) {
+		if row >= len(l.entries) {
 			return
 		}
-		idx := id.Row - 1
-		if idx >= len(l.entries) {
-			return
-		}
-		l.selectedIdx = idx
+		l.selectedIdx = row
 		l.deleteBtn.Enable()
-		entry := l.entries[idx]
+		entry := l.entries[row]
 		l.notesArea.SetText(fmt.Sprintf("Severity: %s\nCreated: %s\n\n%s",
 			entry.Severity, entry.CreatedAt.Format("2006-01-02 15:04"), entry.Notes))
-
 		if entry.HistoryID != nil || entry.RawRequest != "" {
 			l.viewReqBtn.Enable()
 		} else {
 			l.viewReqBtn.Disable()
 		}
 	}
+	l.table.MenuItems = func(row int) []ContextMenuItem {
+		if row >= len(l.entries) {
+			return nil
+		}
+		entry := l.entries[row]
+		return []ContextMenuItem{
+			{
+				Label: "Delete",
+				Action: func() {
+					dialog.ShowConfirm("Delete", fmt.Sprintf("Delete '%s'?", entry.Title), func(ok bool) {
+						if !ok {
+							return
+						}
+						if err := l.projectStore.DeleteLoot(entry.ID); err != nil {
+							logger.Error("loot: delete: %v", err)
+							return
+						}
+						l.reload()
+						l.selectedIdx = -1
+						l.deleteBtn.Disable()
+						l.notesArea.SetText("")
+					}, l.win)
+				},
+			},
+			{
+				Label: "View Request",
+				Action: func() {
+					if entry.HistoryID != nil || entry.RawRequest != "" {
+						l.showLinkedRequest(entry)
+					}
+				},
+			},
+		}
+	}
+
+	tableObj := l.table.Build()
 
 	l.notesArea = newReadOnlyEntry()
 	l.notesArea.SetPlaceHolder("Select an entry to view details...")
@@ -165,7 +195,7 @@ func (l *lootTab) build() fyne.CanvasObject {
 		container.NewScroll(l.notesArea))
 
 	split := container.NewVSplit(
-		container.NewBorder(toolbar, nil, nil, nil, l.table),
+		container.NewBorder(toolbar, nil, nil, nil, tableObj),
 		notesPane,
 	)
 	split.SetOffset(0.6)

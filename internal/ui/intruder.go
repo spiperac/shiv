@@ -58,7 +58,7 @@ type intruderTab struct {
 	results  []intruderResult
 	filtered []intruderResult
 
-	table *widget.Table
+	table *DataTable
 
 	running  atomic.Bool
 	stopChan chan struct{}
@@ -74,8 +74,12 @@ func newIntruderTab(win fyne.Window, projectStore *store.Store, repeater *repeat
 	}
 }
 
-var intruderResultColumns = []string{"Payload", "Status", "Size", "Duration"}
-var intruderResultWidths = []float32{200, 80, 100, 100}
+var intruderColumns = []DataTableColumn{
+	{Header: "Payload", Width: 200},
+	{Header: "Status", Width: 80},
+	{Header: "Size", Width: 100},
+	{Header: "Duration", Width: 100},
+}
 
 func (t *intruderTab) showConfigDialog() {
 	delayEntry := widget.NewEntry()
@@ -232,6 +236,99 @@ func (t *intruderTab) build() fyne.CanvasObject {
 	t.requestPane = newReadOnlyEntry()
 	t.requestPane.SetPlaceHolder("Select a result to view request...")
 
+	// ── DataTable for results ─────────────────────────────────
+	t.table = NewDataTable()
+	t.table.SetWindow(t.win)
+	t.table.Columns = intruderColumns
+	t.table.RowCount = func() int {
+		t.mu.RLock()
+		defer t.mu.RUnlock()
+		return len(t.filtered)
+	}
+	t.table.CellValue = func(row, col int) string {
+		t.mu.RLock()
+		defer t.mu.RUnlock()
+		if row >= len(t.filtered) {
+			return ""
+		}
+		result := t.filtered[row]
+		switch col {
+		case 0:
+			return result.payload
+		case 1:
+			if result.err != "" {
+				return "ERR"
+			}
+			return fmt.Sprintf("%d", result.statusCode)
+		case 2:
+			if result.err != "" {
+				return "-"
+			}
+			return fmt.Sprintf("%db", result.size)
+		case 3:
+			if result.err != "" {
+				return "-"
+			}
+			return fmt.Sprintf("%dms", result.durationMs)
+		}
+		return ""
+	}
+	t.table.CellStyle = func(row, col int) widget.Importance {
+		if col != 1 {
+			return widget.MediumImportance
+		}
+		t.mu.RLock()
+		defer t.mu.RUnlock()
+		if row >= len(t.filtered) {
+			return widget.MediumImportance
+		}
+		result := t.filtered[row]
+		if result.err != "" {
+			return widget.DangerImportance
+		}
+		switch {
+		case result.statusCode >= 500:
+			return widget.DangerImportance
+		case result.statusCode >= 400:
+			return widget.WarningImportance
+		case result.statusCode >= 200 && result.statusCode < 300:
+			return widget.SuccessImportance
+		}
+		return widget.MediumImportance
+	}
+	// intruderResult has no persistent ID from the store; use the row index
+	// cast to int64.  Results are append-only during an attack and are
+	// cleared atomically, so index stability holds within a single run.
+	t.table.RowID = func(row int) int64 {
+		return int64(row)
+	}
+	t.table.OnSelect = func(row int) {
+		t.mu.RLock()
+		if row >= len(t.filtered) {
+			t.mu.RUnlock()
+			return
+		}
+		result := t.filtered[row]
+		t.mu.RUnlock()
+
+		t.selectedResult = &result
+		t.sendToRepeaterBtn.Enable()
+		t.sendToLootBtn.Enable()
+		if result.err != "" {
+			t.responsePane.SetText("Error: " + result.err)
+			t.requestPane.SetText(result.rawReq)
+		} else {
+			t.responsePane.SetText(result.rawResp)
+			t.requestPane.SetText(result.rawReq)
+		}
+	}
+	// Intruder results have no right-click menu (actions are via toolbar buttons).
+	t.table.MenuItems = nil
+
+	tableObj := t.table.Build()
+
+	// ── layout ───────────────────────────────────────────────
+
 	respPane := container.NewBorder(
 		container.NewBorder(nil, nil, nil, t.sendToLootBtn, newBoldLabel("Response")),
 		nil, nil, nil,
@@ -246,88 +343,6 @@ func (t *intruderTab) build() fyne.CanvasObject {
 
 	detailPane := container.NewHSplit(respPane, requestPane)
 	detailPane.SetOffset(0.5)
-
-	t.table = widget.NewTable(
-		func() (int, int) {
-			t.mu.RLock()
-			defer t.mu.RUnlock()
-			return len(t.filtered) + 1, len(intruderResultColumns)
-		},
-		func() fyne.CanvasObject {
-			label := widget.NewLabel("")
-			label.Truncation = fyne.TextTruncateEllipsis
-			return label
-		},
-		func(id widget.TableCellID, obj fyne.CanvasObject) {
-			label := obj.(*widget.Label)
-			if id.Row == 0 {
-				label.TextStyle = fyne.TextStyle{Bold: true}
-				label.SetText(intruderResultColumns[id.Col])
-				return
-			}
-			label.TextStyle = fyne.TextStyle{}
-			t.mu.RLock()
-			idx := id.Row - 1
-			if idx >= len(t.filtered) {
-				t.mu.RUnlock()
-				label.SetText("")
-				return
-			}
-			result := t.filtered[idx]
-			t.mu.RUnlock()
-			switch id.Col {
-			case 0:
-				label.SetText(result.payload)
-			case 1:
-				if result.err != "" {
-					label.SetText("ERR")
-				} else {
-					label.SetText(fmt.Sprintf("%d", result.statusCode))
-				}
-			case 2:
-				if result.err != "" {
-					label.SetText("-")
-				} else {
-					label.SetText(fmt.Sprintf("%db", result.size))
-				}
-			case 3:
-				if result.err != "" {
-					label.SetText("-")
-				} else {
-					label.SetText(fmt.Sprintf("%dms", result.durationMs))
-				}
-			}
-		},
-	)
-
-	for i, width := range intruderResultWidths {
-		t.table.SetColumnWidth(i, width)
-	}
-
-	t.table.OnSelected = func(id widget.TableCellID) {
-		if id.Row == 0 {
-			t.table.UnselectAll()
-			return
-		}
-		t.mu.RLock()
-		idx := id.Row - 1
-		if idx >= len(t.filtered) {
-			t.mu.RUnlock()
-			return
-		}
-		result := t.filtered[idx]
-		t.mu.RUnlock()
-		t.selectedResult = &result
-		t.sendToRepeaterBtn.Enable()
-		t.sendToLootBtn.Enable()
-		if result.err != "" {
-			t.responsePane.SetText("Error: " + result.err)
-			t.requestPane.SetText(result.rawReq)
-		} else {
-			t.responsePane.SetText(result.rawResp)
-			t.requestPane.SetText(result.rawReq)
-		}
-	}
 
 	toolbar := container.NewHBox(t.startBtn, t.stopBtn, configBtn, clearBtn, t.progressLabel)
 
@@ -349,7 +364,7 @@ func (t *intruderTab) build() fyne.CanvasObject {
 	tablePane := container.NewBorder(
 		container.NewBorder(nil, nil, newBoldLabel("Results"), nil, t.filterEntry),
 		nil, nil, nil,
-		t.table,
+		tableObj,
 	)
 
 	resultsSplit := container.NewHSplit(tablePane, detailPane)
@@ -482,6 +497,7 @@ func (t *intruderTab) startAttack() {
 	t.results = nil
 	t.filtered = nil
 	t.mu.Unlock()
+	t.table.ClearSelection()
 	t.table.Refresh()
 	t.responsePane.SetText("")
 	t.requestPane.SetText("")

@@ -30,7 +30,7 @@ type historyTab struct {
 	rows     []store.Transaction
 	filtered []store.Transaction
 
-	table        *tappableTable
+	table        *DataTable
 	filterEntry  *widget.Entry
 	showOutScope *widget.Check
 	reqLabel     *readOnlyEntry
@@ -41,8 +41,14 @@ type historyTab struct {
 	hasSelected bool
 }
 
-var tableColumns = []string{"Method", "Host", "Path", "Status", "Size", "Duration"}
-var columnWidths = []float32{80, 200, 300, 70, 90, 90}
+var tableColumns = []DataTableColumn{
+	{Header: "Method", Width: 80},
+	{Header: "Host", Width: 200},
+	{Header: "Path", Width: 300},
+	{Header: "Status", Width: 70},
+	{Header: "Size", Width: 90},
+	{Header: "Duration", Width: 90},
+}
 
 func newHistoryTab(projectStore *store.Store, win fyne.Window, repeater *repeaterTab, loot *lootTab, intruder *intruderTab) *historyTab {
 	return &historyTab{
@@ -90,86 +96,67 @@ func (h *historyTab) build() fyne.CanvasObject {
 	h.reqLabel = newReadOnlyEntry()
 	h.respLabel = newReadOnlyEntry()
 
-	h.table = newTappableTable(
-		h.win,
-		func() (int, int) {
-			h.mu.RLock()
-			defer h.mu.RUnlock()
-			return len(h.filtered) + 1, len(tableColumns)
-		},
-		func() fyne.CanvasObject {
-			label := widget.NewLabel("")
-			label.Truncation = fyne.TextTruncateEllipsis
-			return label
-		},
-		func(id widget.TableCellID, obj fyne.CanvasObject) {
-			label := obj.(*widget.Label)
-			if id.Row == 0 {
-				label.TextStyle = fyne.TextStyle{Bold: true}
-				label.Importance = widget.MediumImportance
-				label.SetText(tableColumns[id.Col])
-				return
-			}
-			label.TextStyle = fyne.TextStyle{}
-			h.mu.RLock()
-			idx := id.Row - 1
-			if idx >= len(h.filtered) {
-				h.mu.RUnlock()
-				label.SetText("")
-				return
-			}
-			tx := h.filtered[idx]
-			isSelected := h.hasSelected && h.selectedTx.ID == tx.ID
-			h.mu.RUnlock()
-			label.SetText(h.cellText(tx, id.Col))
-			highlightTableRow(label, isSelected, widget.MediumImportance)
-		},
-		func() int {
-			if !h.hasSelected {
-				return -1
-			}
-			h.mu.RLock()
-			defer h.mu.RUnlock()
-			for i, tx := range h.filtered {
-				if tx.ID == h.selectedTx.ID {
-					return i
-				}
-			}
-			return -1
-		},
-		func(row int) []ContextMenuItem {
-			h.mu.RLock()
-			if row >= len(h.filtered) {
-				h.mu.RUnlock()
-				return nil
-			}
-			tx := h.filtered[row]
-			h.mu.RUnlock()
-			return h.contextMenuItems(tx)
-		},
-	)
-
-	for i, colWidth := range columnWidths {
-		h.table.SetColumnWidth(i, colWidth)
+	h.table = NewDataTable()
+	h.table.SetWindow(h.win)
+	h.table.Columns = tableColumns
+	h.table.RowCount = func() int {
+		h.mu.RLock()
+		defer h.mu.RUnlock()
+		return len(h.filtered)
 	}
-
-	h.table.OnSelected = func(id widget.TableCellID) {
-		if id.Row == 0 {
-			h.table.UnselectAll()
-			return
+	h.table.CellValue = func(row, col int) string {
+		h.mu.RLock()
+		defer h.mu.RUnlock()
+		if row >= len(h.filtered) {
+			return ""
+		}
+		return h.cellText(h.filtered[row], col)
+	}
+	h.table.CellStyle = func(row, col int) widget.Importance {
+		// all history cells use default importance; colour is handled by
+		// the selection highlight instead
+		// only colour the Status column (col 3)
+		if col != 3 {
+			return widget.MediumImportance
 		}
 		h.mu.RLock()
-		idx := id.Row - 1
-		if idx >= len(h.filtered) {
+		defer h.mu.RUnlock()
+		if row >= len(h.filtered) {
+			return widget.MediumImportance
+		}
+		status := h.filtered[row].StatusCode
+		switch {
+		case status >= 500:
+			return widget.DangerImportance
+		case status >= 400:
+			return widget.WarningImportance
+		case status >= 300:
+			return widget.LowImportance
+		case status >= 200:
+			return widget.SuccessImportance
+		default:
+			return widget.MediumImportance
+		}
+	}
+	h.table.RowID = func(row int) int64 {
+		h.mu.RLock()
+		defer h.mu.RUnlock()
+		if row >= len(h.filtered) {
+			return 0
+		}
+		return int64(h.filtered[row].ID)
+	}
+	h.table.OnSelect = func(row int) {
+		h.mu.RLock()
+		if row >= len(h.filtered) {
 			h.mu.RUnlock()
 			return
 		}
-		tx := h.filtered[idx]
+		tx := h.filtered[row]
 		h.mu.RUnlock()
 
 		h.selectedTx = tx
 		h.hasSelected = true
-		h.table.Refresh()
 
 		go func() {
 			fullTx, err := h.projectStore.GetTransaction(tx.ID)
@@ -180,10 +167,21 @@ func (h *historyTab) build() fyne.CanvasObject {
 			fyne.Do(func() {
 				h.selectedTx = *fullTx
 				h.showDetail(*fullTx)
-				h.table.Refresh()
 			})
 		}()
 	}
+	h.table.MenuItems = func(row int) []ContextMenuItem {
+		h.mu.RLock()
+		if row >= len(h.filtered) {
+			h.mu.RUnlock()
+			return nil
+		}
+		tx := h.filtered[row]
+		h.mu.RUnlock()
+		return h.contextMenuItems(tx)
+	}
+
+	tableObj := h.table.Build()
 
 	h.win.Canvas().AddShortcut(&desktop.CustomShortcut{KeyName: fyne.KeyR, Modifier: fyne.KeyModifierControl}, func(_ fyne.Shortcut) {
 		if h.hasSelected {
@@ -214,7 +212,7 @@ func (h *historyTab) build() fyne.CanvasObject {
 	detailSplit.SetOffset(0.5)
 
 	mainSplit := container.NewVSplit(
-		container.NewBorder(filterBar, nil, nil, nil, h.table),
+		container.NewBorder(filterBar, nil, nil, nil, tableObj),
 		detailSplit,
 	)
 	mainSplit.SetOffset(0.5)
