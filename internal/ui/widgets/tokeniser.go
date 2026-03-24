@@ -165,38 +165,55 @@ func tokeniseHTTPMeta(line string, isFirstLine bool) []tvToken {
 
 // tokeniseFirstLine tokenises the HTTP request or response line.
 func tokeniseFirstLine(line string) []tvToken {
-	parts := strings.SplitN(line, " ", 3)
+	if strings.TrimSpace(line) == "" {
+		return []tvToken{{Text: line, Kind: tvKindPlain}}
+	}
+
+	parts := strings.Fields(line)
+	if len(parts) == 0 {
+		return []tvToken{{Text: line, Kind: tvKindPlain}}
+	}
+
+	// Response line: HTTP/1.1 200 OK
 	if strings.HasPrefix(parts[0], "HTTP/") {
 		if len(parts) < 2 {
 			return []tvToken{{Text: line, Kind: tvKindPlain}}
 		}
+
 		statusKind := tvKindStatus2xx
-		if len(parts[1]) > 0 {
-			switch parts[1][0] {
-			case '3':
-				statusKind = tvKindStatus3xx
-			case '4':
-				statusKind = tvKindStatus4xx
-			case '5':
-				statusKind = tvKindStatus5xx
-			}
+		switch parts[1][0] {
+		case '3':
+			statusKind = tvKindStatus3xx
+		case '4':
+			statusKind = tvKindStatus4xx
+		case '5':
+			statusKind = tvKindStatus5xx
 		}
+
 		tokens := []tvToken{
 			{Text: parts[0] + " ", Kind: tvKindVersion},
 			{Text: parts[1], Kind: statusKind},
 		}
-		if len(parts) == 3 {
-			tokens = append(tokens, tvToken{Text: " " + parts[2], Kind: tvKindLow})
+
+		if len(parts) > 2 {
+			tokens = append(tokens, tvToken{
+				Text: " " + strings.Join(parts[2:], " "),
+				Kind: tvKindLow,
+			})
 		}
+
 		return tokens
 	}
-	if len(parts) == 3 {
+
+	// Request line: GET /path HTTP/1.1
+	if len(parts) >= 3 {
 		return []tvToken{
 			{Text: parts[0] + " ", Kind: tvKindMethod},
 			{Text: parts[1], Kind: tvKindPath},
-			{Text: " " + parts[2], Kind: tvKindVersion},
+			{Text: " " + strings.Join(parts[2:], " "), Kind: tvKindVersion},
 		}
 	}
+
 	return []tvToken{{Text: line, Kind: tvKindPlain}}
 }
 
@@ -282,38 +299,60 @@ func wrapTokens(tokens []tvToken, rawLine string, charsPerLine int) []tvLine {
 	if charsPerLine <= 0 {
 		charsPerLine = 80
 	}
-	runes := []rune(rawLine)
-	if len(runes) <= charsPerLine {
-		return []tvLine{{Tokens: tokens, Raw: rawLine}}
-	}
 
 	var result []tvLine
-	for start := 0; start < len(runes); start += charsPerLine {
-		end := start + charsPerLine
-		if end > len(runes) {
-			end = len(runes)
-		}
-		chunk := string(runes[start:end])
+	var current []tvToken
+	currentLen := 0
 
-		var chunkTokens []tvToken
-		tokenStart := 0
-		for _, token := range tokens {
-			tokenRunes := []rune(token.Text)
-			tokenEnd := tokenStart + len(tokenRunes)
-			overlapStart := max(tokenStart, start) - tokenStart
-			overlapEnd := min(tokenEnd, end) - tokenStart
-			if overlapStart < overlapEnd && overlapStart >= 0 && overlapEnd <= len(tokenRunes) {
-				chunkTokens = append(chunkTokens, tvToken{
-					Text: string(tokenRunes[overlapStart:overlapEnd]),
-					Kind: token.Kind,
-				})
-			}
-			tokenStart = tokenEnd
+	flush := func() {
+		if len(current) == 0 {
+			return
 		}
-		if len(chunkTokens) == 0 {
-			chunkTokens = []tvToken{{Text: chunk, Kind: tvKindPlain}}
+		var raw strings.Builder
+		for _, t := range current {
+			raw.WriteString(t.Text)
 		}
-		result = append(result, tvLine{Tokens: chunkTokens, Raw: chunk})
+		result = append(result, tvLine{Tokens: current, Raw: raw.String()})
+		current = nil
+		currentLen = 0
 	}
+
+	for _, token := range tokens {
+		tokenLen := len([]rune(token.Text))
+
+		// never split JSON strings
+		if token.Kind == tvKindJSONStr || token.Kind == tvKindJSONKey {
+			if currentLen+tokenLen > charsPerLine {
+				flush()
+			}
+			current = append(current, token)
+			currentLen += tokenLen
+			continue
+		}
+
+		// split other tokens if needed
+		runes := []rune(token.Text)
+		for len(runes) > 0 {
+			spaceLeft := charsPerLine - currentLen
+			if spaceLeft <= 0 {
+				flush()
+				spaceLeft = charsPerLine
+			}
+
+			n := len(runes)
+			if n > spaceLeft {
+				n = spaceLeft
+			}
+
+			current = append(current, tvToken{
+				Text: string(runes[:n]),
+				Kind: token.Kind,
+			})
+			currentLen += n
+			runes = runes[n:]
+		}
+	}
+
+	flush()
 	return result
 }

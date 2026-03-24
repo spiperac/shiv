@@ -247,7 +247,14 @@ func (h *historyTab) contextMenuItems(tx store.Transaction) []widgets.ContextMen
 		{
 			Label: "Send to Repeater",
 			Action: func() {
-				h.sendToRepeater(tx)
+				go func() {
+					fullTx, err := h.projectStore.GetTransaction(tx.ID)
+					if err != nil {
+						logger.Error("send to repeater: %v", err)
+						return
+					}
+					fyne.Do(func() { h.sendToRepeater(*fullTx) })
+				}()
 			},
 		},
 		{
