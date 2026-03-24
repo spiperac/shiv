@@ -277,7 +277,7 @@ func (view *TextView) visibleLineCount() int {
 	if availHeight < 0 {
 		return 0
 	}
-	return int(availHeight/tvLineH) + 1
+	return int(availHeight / tvLineH)
 }
 
 // posFromPoint converts a canvas-local position to a (line, col) pair in
@@ -579,7 +579,7 @@ func (thumb *tvScrollThumb) Dragged(ev *fyne.DragEvent) {
 		return
 	}
 
-	newThumbTop := thumb.Position().Y - tvPadY + ev.Dragged.DY
+	newThumbTop := ev.AbsolutePosition.Y - widgetPos.Y - tvPadY - thumbHeight/2
 	if newThumbTop < 0 {
 		newThumbTop = 0
 	}
