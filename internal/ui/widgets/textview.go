@@ -311,7 +311,7 @@ func (view *TextView) TypedShortcut(s fyne.Shortcut) {
 	switch s.(type) {
 	case *fyne.ShortcutCopy:
 		if view.win != nil && view.hasSelection {
-			view.win.Clipboard().SetContent(view.selectedText())
+			fyne.CurrentApp().Clipboard().SetContent(view.selectedText())
 		}
 	case *fyne.ShortcutSelectAll:
 		view.mu.RLock()
@@ -322,10 +322,7 @@ func (view *TextView) TypedShortcut(s fyne.Shortcut) {
 		}
 		view.mu.RUnlock()
 		view.selAnchorLine, view.selAnchorCol = 0, 0
-		view.selLine = totalLines - 1
-		if view.selLine < 0 {
-			view.selLine = 0
-		}
+		view.selLine = max(totalLines-1, 0)
 		view.selCol = len([]rune(lastRaw))
 		view.hasSelection = true
 		view.Refresh()

@@ -12,7 +12,6 @@ import (
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
-	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/widget"
 
 	"github.com/shiv/internal/logger"
@@ -188,12 +187,6 @@ func (h *historyTab) build() fyne.CanvasObject {
 	}
 
 	tableObj := h.table.Build()
-
-	h.win.Canvas().AddShortcut(&desktop.CustomShortcut{KeyName: fyne.KeyR, Modifier: fyne.KeyModifierControl}, func(_ fyne.Shortcut) {
-		if h.hasSelected {
-			h.sendToRepeater(h.selectedTx)
-		}
-	})
 
 	inspectBtn := widget.NewButtonWithIcon("Inspector", AppIcon("inspector"), func() {
 		if !h.hasSelected {

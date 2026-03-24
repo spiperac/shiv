@@ -115,6 +115,8 @@ func ShowMainWindow(app fyne.App, projectStore *store.Store, proxyServer *proxy.
 		container.NewTabItemWithIcon("Loot", AppIcon("loot"), loot.build()),
 	)
 	tabs.SetTabLocation(container.TabLocationTop)
+	keybinds := newKeybinds(mainWin, tabs, history, repeater)
+	keybinds.Update()
 
 	mainWin.SetContent(container.NewBorder(functionBar, nil, nil, nil, tabs))
 	mainWin.Show()

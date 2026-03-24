@@ -16,7 +16,6 @@ import (
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
-	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
@@ -61,25 +60,6 @@ func (r *repeaterTab) closeTab(closed *container.TabItem) {
 func (r *repeaterTab) build() fyne.CanvasObject {
 	r.tabs = container.NewDocTabs()
 	r.tabs.SetTabLocation(container.TabLocationTop)
-
-	r.win.Canvas().AddShortcut(&desktop.CustomShortcut{KeyName: fyne.KeyS, Modifier: fyne.KeyModifierControl}, func(_ fyne.Shortcut) {
-		selected := r.tabs.Selected()
-		if selected == nil {
-			return
-		}
-		if fn, ok := r.sendFns[selected]; ok {
-			fn()
-		}
-	})
-
-	r.win.Canvas().AddShortcut(&desktop.CustomShortcut{KeyName: fyne.KeyW, Modifier: fyne.KeyModifierControl}, func(_ fyne.Shortcut) {
-		selected := r.tabs.Selected()
-		if selected == nil {
-			return
-		}
-		r.closeTab(selected)
-		r.tabs.Remove(selected)
-	})
 
 	r.tabs.OnSelected = func(item *container.TabItem) {
 		if fn, ok := r.loadFns[item]; ok {
@@ -208,7 +188,6 @@ func (r *repeaterTab) buildTabItem(tab store.RepeaterTab) *container.TabItem {
 	}
 
 	sendBtn.OnTapped = doSend
-	reqEditor.onCtrlS = doSend
 
 	cloneBtn := widget.NewButtonWithIcon("Clone", theme.ContentCopyIcon(), func() {
 		raw := reqEditor.Text
@@ -404,7 +383,6 @@ func parseHostFromRaw(raw string) (host string, port int, useTLS bool) {
 
 type repeaterEntry struct {
 	widget.Entry
-	onCtrlS func()
 }
 
 func newRepeaterEntry() *repeaterEntry {
@@ -414,16 +392,4 @@ func newRepeaterEntry() *repeaterEntry {
 	e.TextStyle = fyne.TextStyle{Monospace: true}
 	e.Wrapping = fyne.TextWrapBreak
 	return e
-}
-
-func (e *repeaterEntry) TypedShortcut(shortcut fyne.Shortcut) {
-	if cs, ok := shortcut.(*desktop.CustomShortcut); ok {
-		if cs.KeyName == fyne.KeyS && cs.Modifier == fyne.KeyModifierControl {
-			if e.onCtrlS != nil {
-				e.onCtrlS()
-			}
-			return
-		}
-	}
-	e.Entry.TypedShortcut(shortcut)
 }
