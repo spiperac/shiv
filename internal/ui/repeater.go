@@ -17,6 +17,7 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/driver/desktop"
+	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
@@ -33,6 +34,7 @@ type repeaterTab struct {
 	win          fyne.Window
 	tabIDs       map[*container.TabItem]int64
 	sendFns      map[*container.TabItem]func()
+	loadFns      map[*container.TabItem]func()
 }
 
 func newRepeaterTab(projectStore *store.Store, win fyne.Window) *repeaterTab {
@@ -41,6 +43,7 @@ func newRepeaterTab(projectStore *store.Store, win fyne.Window) *repeaterTab {
 		win:          win,
 		tabIDs:       make(map[*container.TabItem]int64),
 		sendFns:      make(map[*container.TabItem]func()),
+		loadFns:      make(map[*container.TabItem]func()),
 	}
 }
 
@@ -78,6 +81,13 @@ func (r *repeaterTab) build() fyne.CanvasObject {
 		r.tabs.Remove(selected)
 	})
 
+	r.tabs.OnSelected = func(item *container.TabItem) {
+		if fn, ok := r.loadFns[item]; ok {
+			fn()
+			delete(r.loadFns, item)
+		}
+	}
+
 	r.tabs.OnClosed = r.closeTab
 
 	r.tabs.CreateTab = func() *container.TabItem {
@@ -103,6 +113,12 @@ func (r *repeaterTab) build() fyne.CanvasObject {
 	}
 	for _, t := range saved {
 		r.tabs.Append(r.buildTabItem(t))
+	}
+	if selected := r.tabs.Selected(); selected != nil {
+		if fn, ok := r.loadFns[selected]; ok {
+			fn()
+			delete(r.loadFns, selected)
+		}
 	}
 
 	return r.tabs
@@ -130,7 +146,6 @@ func (r *repeaterTab) AddTab(name, host string, port int, useTLS bool, rawReques
 func (r *repeaterTab) buildTabItem(tab store.RepeaterTab) *container.TabItem {
 	reqEditor := newRepeaterEntry()
 	reqEditor.SetPlaceHolder("Paste or edit raw HTTP request here...")
-	reqEditor.SetText(tab.RawRequest)
 
 	respLabel := widgets.NewTextView()
 	respLabel.SetWindow(r.win)
@@ -150,7 +165,7 @@ func (r *repeaterTab) buildTabItem(tab store.RepeaterTab) *container.TabItem {
 	})
 	inspectBtn.Disable()
 
-	sendToLootBtn := widget.NewButtonWithIcon("Send to Loot", AppIcon("loot"), func() {
+	sendToLootBtn := widget.NewButtonWithIcon("Loot", AppIcon("loot"), func() {
 		if r.loot == nil {
 			return
 		}
@@ -211,31 +226,27 @@ func (r *repeaterTab) buildTabItem(tab store.RepeaterTab) *container.TabItem {
 		r.AddTab(name, host, port, useTLS, raw)
 	})
 
-	toolbar := container.NewVBox(
-		widget.NewLabel(""),
+	toolbar := container.NewBorder(nil, nil,
 		container.NewHBox(sendBtn, cloneBtn),
+		container.NewHBox(sendToLootBtn, inspectBtn),
+		widget.NewLabel(""),
 	)
 
 	reqPane := container.NewBorder(newBoldLabel("Request"), nil, nil, nil,
 		container.NewScroll(reqEditor))
 
-	respPane := container.NewBorder(
-		container.NewBorder(nil, nil, nil,
-			container.NewHBox(sendToLootBtn, inspectBtn),
-			newBoldLabel("Response"),
-		),
-		nil, nil, nil,
+	respPane := container.NewBorder(newBoldLabel("Response"), nil, nil, nil,
 		respLabel.Build())
 
 	split := container.NewHSplit(reqPane, respPane)
 	split.SetOffset(0.5)
 
-	content := container.NewBorder(toolbar, nil, nil, nil, split)
-
+	content := container.NewBorder(container.New(layout.NewCustomPaddedLayout(8, 0, 0, 0), toolbar), nil, nil, nil, split)
 	tabItem := container.NewTabItem(tab.Name, content)
 
 	r.sendFns[tabItem] = doSend
 	r.tabIDs[tabItem] = tabID
+	r.loadFns[tabItem] = func() { reqEditor.SetText(tab.RawRequest) }
 
 	return tabItem
 }
