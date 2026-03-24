@@ -45,10 +45,8 @@ func main() {
 	}
 	logger.Init(*verbose)
 
-	fyneApp := app.NewWithID("io.shiv.proxy")
+	fyneApp := app.NewWithID("net.shivapp")
 	fyneApp.SetIcon(fyne.NewStaticResource("logo.png", assets.Logo))
-	settings := store.LoadSettings()
-	fyneApp.Settings().SetTheme(ui.NewVagueTheme(settings.DarkTheme))
 
 	ui.ShowLaunchScreen(fyneApp, func(projectPath string, launchWin fyne.Window) {
 		if projectPath == "" {
@@ -63,8 +61,11 @@ func main() {
 			return
 		}
 
-		proxyAddr := fmt.Sprintf("%s:%d", settings.ProxyHost, settings.ProxyPort)
-
+		prefs := fyneApp.Preferences()
+		proxyAddr := fmt.Sprintf("%s:%d",
+			prefs.StringWithFallback("proxy_host", "127.0.0.1"),
+			prefs.IntWithFallback("proxy_port", 9090),
+		)
 		proxyServer, err := proxy.New(proxyAddr, projectStore)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "[shiv] fatal: %v\n", err)
@@ -86,7 +87,7 @@ func main() {
 			}()
 		}
 
-		if settings.ProxyEnabled {
+		if prefs.BoolWithFallback("proxy_enabled", true) {
 			go func() {
 				if err := proxyServer.Start(); err != nil {
 					logger.Error("proxy: %v", err)
@@ -94,7 +95,7 @@ func main() {
 			}()
 		}
 
-		ui.ShowMainWindow(fyneApp, projectStore, proxyServer, settings, launchWin)
+		ui.ShowMainWindow(fyneApp, projectStore, proxyServer, launchWin)
 	})
 
 	fyneApp.Run()

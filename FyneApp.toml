@@ -3,6 +3,6 @@ Website = "https://github.com/spiperac/shiv"
 [Details]
 Icon = "assets/logo.png"
 Name = "Shiv"
-ID = "io.github.spiperac.shiv"
+ID = "net.shivapp"
 Version = "0.1.0"
 Build = 7

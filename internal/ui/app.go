@@ -16,28 +16,39 @@ import (
 	"github.com/shiv/internal/store"
 )
 
+const (
+	prefKeyDarkTheme    = "dark_theme"
+	prefKeyProxyHost    = "proxy_host"
+	prefKeyProxyPort    = "proxy_port"
+	prefKeyProxyEnabled = "proxy_enabled"
+
+	defaultDarkTheme    = true
+	defaultProxyHost    = "127.0.0.1"
+	defaultProxyPort    = 9090
+	defaultProxyEnabled = true
+)
+
 var proxyStatusBinding = binding.NewString()
 var proxyRunningBinding = binding.NewBool()
 
-func ShowMainWindow(app fyne.App, projectStore *store.Store, proxyServer *proxy.Proxy, settings store.Settings, launchWin fyne.Window) {
-	mainWin := app.NewWindow("Shiv")
+func ShowMainWindow(fyneApp fyne.App, projectStore *store.Store, proxyServer *proxy.Proxy, launchWin fyne.Window) {
+	prefs := fyneApp.Preferences()
+
+	mainWin := fyneApp.NewWindow("Shiv")
 	mainWin.Resize(fyne.NewSize(1280, 800))
 	mainWin.SetMaster()
 
-	isDark := settings.DarkTheme
+	isDark := prefs.BoolWithFallback(prefKeyDarkTheme, defaultDarkTheme)
+	fyneApp.Settings().SetTheme(NewVagueTheme(isDark))
 
 	toggleThemeBtn := widget.NewButtonWithIcon("", theme.ColorChromaticIcon(), nil)
 	toggleThemeBtn.OnTapped = func() {
 		isDark = !isDark
-		app.Settings().SetTheme(NewVagueTheme(isDark))
-		currentSettings := store.LoadSettings()
-		currentSettings.DarkTheme = isDark
-		store.SaveSettings(currentSettings)
+		fyneApp.Settings().SetTheme(NewVagueTheme(isDark))
+		prefs.SetBool(prefKeyDarkTheme, isDark)
 	}
 
-	settingsBtn := widget.NewButtonWithIcon("", AppIcon("settings"), func() {
-		showSettingsDialog(app, mainWin, proxyServer)
-	})
+	settingsBtn := widget.NewButtonWithIcon("", AppIcon("settings"), nil)
 
 	proxyToggleBtn := widget.NewButtonWithIcon("", theme.MediaRecordIcon(), nil)
 
@@ -55,33 +66,39 @@ func ShowMainWindow(app fyne.App, projectStore *store.Store, proxyServer *proxy.
 		isRunning, _ := proxyRunningBinding.Get()
 		isRunning = !isRunning
 		if isRunning {
-			currentSettings := store.LoadSettings()
-			addr := fmt.Sprintf("%s:%d", currentSettings.ProxyHost, currentSettings.ProxyPort)
+			proxyHost := prefs.StringWithFallback(prefKeyProxyHost, defaultProxyHost)
+			proxyPort := prefs.IntWithFallback(prefKeyProxyPort, defaultProxyPort)
+			addr := fmt.Sprintf("%s:%d", proxyHost, proxyPort)
 			if err := proxyServer.Restart(addr); err != nil {
 				isRunning = false
 			}
 		} else {
 			proxyServer.Stop()
 		}
-		currentSettings := store.LoadSettings()
-		currentSettings.ProxyEnabled = isRunning
-		store.SaveSettings(currentSettings)
+		prefs.SetBool(prefKeyProxyEnabled, isRunning)
 		proxyRunningBinding.Set(isRunning)
+		proxyHost := prefs.StringWithFallback(prefKeyProxyHost, defaultProxyHost)
+		proxyPort := prefs.IntWithFallback(prefKeyProxyPort, defaultProxyPort)
 		if isRunning {
-			proxyStatusBinding.Set(fmt.Sprintf("Proxy: running on %s:%d", currentSettings.ProxyHost, currentSettings.ProxyPort))
+			proxyStatusBinding.Set(fmt.Sprintf("Proxy: running on %s:%d", proxyHost, proxyPort))
 		} else {
 			proxyStatusBinding.Set("Proxy: stopped")
 		}
 	}
 
-	if settings.ProxyEnabled {
-		proxyStatusBinding.Set(fmt.Sprintf("Proxy: running on %s:%d", settings.ProxyHost, settings.ProxyPort))
+	proxyHost := prefs.StringWithFallback(prefKeyProxyHost, defaultProxyHost)
+	proxyPort := prefs.IntWithFallback(prefKeyProxyPort, defaultProxyPort)
+	proxyEnabled := prefs.BoolWithFallback(prefKeyProxyEnabled, defaultProxyEnabled)
+
+	if proxyEnabled {
+		proxyStatusBinding.Set(fmt.Sprintf("Proxy: running on %s:%d", proxyHost, proxyPort))
 	} else {
 		proxyStatusBinding.Set("Proxy: stopped")
 	}
+	proxyRunningBinding.Set(proxyEnabled)
+
 	proxyLabel := widget.NewLabelWithData(proxyStatusBinding)
 	proxyLabel.Importance = widget.LowImportance
-	proxyRunningBinding.Set(settings.ProxyEnabled)
 
 	logo := canvas.NewImageFromResource(fyne.NewStaticResource("logo.png", assets.Logo))
 	logo.FillMode = canvas.ImageFillContain
@@ -96,10 +113,6 @@ func ShowMainWindow(app fyne.App, projectStore *store.Store, proxyServer *proxy.
 		layout.NewSpacer(),
 	)
 
-	// All tabs follow the same pattern:
-	// 1. Create struct via newXTab(...)
-	// 2. Wire cross-tab dependencies
-	// 3. Call .build() when passing to AppTabs
 	repeater := newRepeaterTab(projectStore, mainWin)
 	loot := newLootTab(projectStore, mainWin, repeater)
 	repeater.loot = loot
@@ -115,8 +128,11 @@ func ShowMainWindow(app fyne.App, projectStore *store.Store, proxyServer *proxy.
 		container.NewTabItemWithIcon("Loot", AppIcon("loot"), loot.build()),
 	)
 	tabs.SetTabLocation(container.TabLocationTop)
-	keybinds := newKeybinds(mainWin, tabs, history, repeater)
-	keybinds.Update()
+
+	keybinds := newKeybinds(mainWin, tabs, history, repeater, prefs)
+	settingsBtn.OnTapped = func() {
+		showSettingsDialog(fyneApp, mainWin, proxyServer, keybinds)
+	}
 
 	mainWin.SetContent(container.NewBorder(functionBar, nil, nil, nil, tabs))
 	mainWin.Show()

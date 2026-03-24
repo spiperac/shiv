@@ -6,6 +6,16 @@ import (
 	"fyne.io/fyne/v2/driver/desktop"
 )
 
+const (
+	prefKeySendRequest = "shortcut_send_request"
+	prefKeyCloseTab    = "shortcut_close_tab"
+	prefKeyToRepeater  = "shortcut_to_repeater"
+
+	defaultKeySendRequest fyne.KeyName = fyne.KeyS
+	defaultKeyCloseTab    fyne.KeyName = fyne.KeyW
+	defaultKeyToRepeater  fyne.KeyName = fyne.KeyR
+)
+
 type Keybinds struct {
 	win      fyne.Window
 	tabs     *container.AppTabs
@@ -13,70 +23,70 @@ type Keybinds struct {
 	repeater *repeaterTab
 	active   []fyne.Shortcut
 
-	KeySend       fyne.KeyName
-	KeyCloseTab   fyne.KeyName
-	KeyToRepeater fyne.KeyName
+	KeySendRequest fyne.KeyName
+	KeyCloseTab    fyne.KeyName
+	KeyToRepeater  fyne.KeyName
 }
 
-func newKeybinds(win fyne.Window, tabs *container.AppTabs, history *historyTab, repeater *repeaterTab) *Keybinds {
-	k := &Keybinds{
-		win:           win,
-		tabs:          tabs,
-		history:       history,
-		repeater:      repeater,
-		KeySend:       fyne.KeyS,
-		KeyCloseTab:   fyne.KeyW,
-		KeyToRepeater: fyne.KeyR,
+func newKeybinds(win fyne.Window, tabs *container.AppTabs, history *historyTab, repeater *repeaterTab, prefs fyne.Preferences) *Keybinds {
+	keybinds := &Keybinds{
+		win:            win,
+		tabs:           tabs,
+		history:        history,
+		repeater:       repeater,
+		KeySendRequest: fyne.KeyName(prefs.StringWithFallback(prefKeySendRequest, string(defaultKeySendRequest))),
+		KeyCloseTab:    fyne.KeyName(prefs.StringWithFallback(prefKeyCloseTab, string(defaultKeyCloseTab))),
+		KeyToRepeater:  fyne.KeyName(prefs.StringWithFallback(prefKeyToRepeater, string(defaultKeyToRepeater))),
 	}
-	k.Update()
-	return k
+	keybinds.Update()
+	return keybinds
 }
 
-func (k *Keybinds) Update() {
-	for _, s := range k.active {
-		k.win.Canvas().RemoveShortcut(s)
+func (keybinds *Keybinds) Update() {
+	for _, registeredShortcut := range keybinds.active {
+		keybinds.win.Canvas().RemoveShortcut(registeredShortcut)
 	}
-	k.active = nil
+	keybinds.active = nil
 
-	activeTab := func(name string) bool {
-		selected := k.tabs.Selected()
-		return selected != nil && selected.Text == name
+	isActiveTab := func(tabName string) bool {
+		selectedTab := keybinds.tabs.Selected()
+		return selectedTab != nil && selectedTab.Text == tabName
 	}
 
-	send := &desktop.CustomShortcut{KeyName: k.KeySend, Modifier: fyne.KeyModifierControl}
-	k.win.Canvas().AddShortcut(send, func(_ fyne.Shortcut) {
-		if !activeTab("Repeater") {
+	sendRequestShortcut := &desktop.CustomShortcut{KeyName: keybinds.KeySendRequest, Modifier: fyne.KeyModifierControl}
+	keybinds.win.Canvas().AddShortcut(sendRequestShortcut, func(_ fyne.Shortcut) {
+		if !isActiveTab("Repeater") {
 			return
 		}
-		selected := k.repeater.tabs.Selected()
-		if selected == nil {
+		selectedTab := keybinds.repeater.tabs.Selected()
+		if selectedTab == nil {
 			return
 		}
-		if fn, ok := k.repeater.sendFns[selected]; ok {
-			fn()
+		if sendFn, ok := keybinds.repeater.sendFns[selectedTab]; ok {
+			sendFn()
 		}
 	})
-	k.active = append(k.active, send)
+	keybinds.active = append(keybinds.active, sendRequestShortcut)
 
-	closeTab := &desktop.CustomShortcut{KeyName: k.KeyCloseTab, Modifier: fyne.KeyModifierControl}
-	k.win.Canvas().AddShortcut(closeTab, func(_ fyne.Shortcut) {
-		if !activeTab("Repeater") {
+	closeTabShortcut := &desktop.CustomShortcut{KeyName: keybinds.KeyCloseTab, Modifier: fyne.KeyModifierControl}
+	keybinds.win.Canvas().AddShortcut(closeTabShortcut, func(_ fyne.Shortcut) {
+		if !isActiveTab("Repeater") {
 			return
 		}
-		selected := k.repeater.tabs.Selected()
-		if selected == nil {
+		selectedTab := keybinds.repeater.tabs.Selected()
+		if selectedTab == nil {
 			return
 		}
-		k.repeater.closeTab(selected)
-		k.repeater.tabs.Remove(selected)
+		keybinds.repeater.closeTab(selectedTab)
+		keybinds.repeater.tabs.Remove(selectedTab)
 	})
-	k.active = append(k.active, closeTab)
+	keybinds.active = append(keybinds.active, closeTabShortcut)
 
-	toRepeater := &desktop.CustomShortcut{KeyName: k.KeyToRepeater, Modifier: fyne.KeyModifierControl}
-	k.win.Canvas().AddShortcut(toRepeater, func(_ fyne.Shortcut) {
-		if activeTab("History") && k.history.hasSelected {
-			k.history.sendToRepeater(k.history.selectedTx)
+	toRepeaterShortcut := &desktop.CustomShortcut{KeyName: keybinds.KeyToRepeater, Modifier: fyne.KeyModifierControl}
+	keybinds.win.Canvas().AddShortcut(toRepeaterShortcut, func(_ fyne.Shortcut) {
+		if isActiveTab("History") && keybinds.history.hasSelected {
+			keybinds.history.sendToRepeater(keybinds.history.selectedTx)
 		}
 	})
-	k.active = append(k.active, toRepeater)
+	keybinds.active = append(keybinds.active, toRepeaterShortcut)
 }
