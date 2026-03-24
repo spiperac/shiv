@@ -41,7 +41,7 @@ func ShowLaunchScreen(app fyne.App, onSelect func(projectPath string, w fyne.Win
 		func() fyne.CanvasObject {
 			return container.NewHBox(
 				widget.NewIcon(AppIcon("project")),
-				container.NewVBox(
+				container.NewHBox(
 					widget.NewLabel("name"),
 					widget.NewLabel("date"),
 				),
@@ -108,9 +108,9 @@ func ShowLaunchScreen(app fyne.App, onSelect func(projectPath string, w fyne.Win
 
 	logo := canvas.NewImageFromResource(fyne.NewStaticResource("logo.png", assets.Logo))
 	logo.FillMode = canvas.ImageFillContain
-	logo.SetMinSize(fyne.NewSize(64, 64))
+	logo.SetMinSize(fyne.NewSize(128, 128))
 
-	subtitle := widget.NewLabel("HTTP/HTTPS Interception Proxy")
+	subtitle := widget.NewLabel("HTTP/HTTPS Proxy Ninja")
 	subtitle.Importance = widget.LowImportance
 
 	recentLabel := widget.NewLabel("Recent Projects")

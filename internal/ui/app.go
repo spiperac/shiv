@@ -50,14 +50,14 @@ func ShowMainWindow(fyneApp fyne.App, projectStore *store.Store, proxyServer *pr
 
 	settingsBtn := widget.NewButtonWithIcon("", AppIcon("settings"), nil)
 
-	proxyToggleBtn := widget.NewButtonWithIcon("", theme.MediaRecordIcon(), nil)
+	proxyToggleBtn := widget.NewButtonWithIcon("", AppIcon("off-button"), nil)
 
 	proxyRunningBinding.AddListener(binding.NewDataListener(func() {
 		running, _ := proxyRunningBinding.Get()
 		if running {
-			proxyToggleBtn.Importance = widget.SuccessImportance
+			proxyToggleBtn.SetIcon(AppIcon("on-button"))
 		} else {
-			proxyToggleBtn.Importance = widget.DangerImportance
+			proxyToggleBtn.SetIcon(AppIcon("off-button"))
 		}
 		proxyToggleBtn.Refresh()
 	}))

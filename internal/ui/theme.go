@@ -70,6 +70,10 @@ func AppIcon(name string) fyne.Resource {
 		return fyne.NewStaticResource("project.png", assets.IconProject)
 	case "scope":
 		return fyne.NewStaticResource("scope.png", assets.IconScope)
+	case "off-button":
+		return fyne.NewStaticResource("off-button.png", assets.IconOffButton)
+	case "on-button":
+		return fyne.NewStaticResource("on-button.png", assets.IconOnButton)
 	case "settings":
 		return fyne.NewStaticResource("settings.png", assets.IconSettings)
 	}

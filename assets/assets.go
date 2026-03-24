@@ -38,6 +38,12 @@ var IconScope []byte
 //go:embed icons/settings.png
 var IconSettings []byte
 
+//go:embed icons/on-button.png
+var IconOnButton []byte
+
+//go:embed icons/off-button.png
+var IconOffButton []byte
+
 //go:embed findings.md.tmpl
 var FindingsTemplate string
 
