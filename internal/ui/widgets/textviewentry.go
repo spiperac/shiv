@@ -64,6 +64,7 @@ type TextViewEntry struct {
 	visualCache      []tveVisualLine
 	visualCacheRaw   string
 	visualCacheWidth int
+	visualCacheValid bool
 
 	win  fyne.Window
 	rend *tveRenderer
@@ -109,7 +110,7 @@ func (e *TextViewEntry) SetText(s string) {
 	e.cursorLine = 0
 	e.cursorCol = 0
 	e.undoStack = nil
-	e.visualCacheRaw = "" // invalidate
+	e.visualCacheValid = false
 	e.mu.Unlock()
 	e.Refresh()
 }
@@ -140,7 +141,7 @@ func (e *TextViewEntry) visual() []tveVisualLine {
 
 	e.mu.Lock()
 	raw := e.rawFull
-	if e.visualCache != nil && e.visualCacheRaw == raw && e.visualCacheWidth == cpl {
+	if e.visualCache != nil && e.visualCacheValid && e.visualCacheRaw == raw && e.visualCacheWidth == cpl {
 		cached := e.visualCache
 		e.mu.Unlock()
 		return cached
@@ -150,6 +151,8 @@ func (e *TextViewEntry) visual() []tveVisualLine {
 	e.visualCache = built
 	e.visualCacheRaw = raw
 	e.visualCacheWidth = cpl
+	e.visualCacheValid = true
+
 	e.mu.Unlock()
 	return built
 }
@@ -159,7 +162,7 @@ func (e *TextViewEntry) visual() []tveVisualLine {
 func (e *TextViewEntry) commitLines(lines []string) {
 	e.mu.Lock()
 	e.rawFull = strings.Join(lines, "\n")
-	e.visualCacheRaw = "" // invalidate
+	e.visualCacheValid = false
 	e.mu.Unlock()
 }
 
@@ -288,6 +291,15 @@ func (e *TextViewEntry) deleteSelection(lines []string) []string {
 		return lines
 	}
 	startLine, startCol, endLine, endCol := e.normaliseSelection()
+	if !e.hasSelection {
+		return lines
+	}
+	if startLine >= len(lines) {
+		startLine = len(lines) - 1
+	}
+	if endLine >= len(lines) {
+		endLine = len(lines) - 1
+	}
 	if startLine == endLine {
 		runes := []rune(lines[startLine])
 		if startCol > len(runes) {
@@ -934,7 +946,7 @@ func (e *TextViewEntry) TypedShortcut(s fyne.Shortcut) {
 			undo := e.undoStack[len(e.undoStack)-1]
 			e.undoStack = e.undoStack[:len(e.undoStack)-1]
 			e.rawFull = undo.raw
-			e.visualCacheRaw = ""
+			e.visualCacheValid = false
 			e.cursorLine = undo.cursorLine
 			e.cursorCol = undo.cursorCol
 			e.hasSelection = false
