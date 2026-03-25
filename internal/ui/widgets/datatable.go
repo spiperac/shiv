@@ -177,20 +177,6 @@ func (t *DataTable) visibleSlots() int {
 	return int(availHeight/dtRowH) + 2
 }
 
-// selectedRowIndex resolves selectedID to its current row index, or -1.
-func (t *DataTable) selectedRowIndex() int {
-	if !t.hasSelected || t.RowID == nil {
-		return -1
-	}
-	rowCount := t.rowCount()
-	for i := 0; i < rowCount; i++ {
-		if t.RowID(i) == t.selectedID {
-			return i
-		}
-	}
-	return -1
-}
-
 // cellColor maps a widget.Importance value to a theme colour.
 func (t *DataTable) cellColor(row, col int) color.Color {
 	importance := widget.MediumImportance
@@ -441,7 +427,6 @@ func (r *dtRenderer) layoutHeader() {
 
 func (r *dtRenderer) layoutBody() {
 	totalRows := r.table.rowCount()
-	selectedRow := r.table.selectedRowIndex()
 	needed := int((r.size.Height-dtHdrH)/dtRowH) + 2
 
 	yPos := dtHdrH
@@ -463,7 +448,7 @@ func (r *dtRenderer) layoutBody() {
 		}
 
 		switch {
-		case dataIdx == selectedRow:
+		case r.table.hasSelected && r.table.RowID != nil && r.table.RowID(dataIdx) == r.table.selectedID:
 			rowBg.FillColor = theme.Color(theme.ColorNameSelection)
 		case slot%2 == 0:
 			rowBg.FillColor = theme.Color(theme.ColorNameBackground)

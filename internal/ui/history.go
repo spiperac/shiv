@@ -451,12 +451,7 @@ func formatRequest(tx store.Transaction) string {
 	}
 	builder.WriteString("\r\n")
 	if len(tx.ReqBody) > 0 {
-		ct := tx.ReqHeaders.Get("Content-Type")
-		if strings.Contains(ct, "application/json") {
-			builder.Write(prettyJSON(tx.ReqBody))
-		} else {
-			builder.WriteString(string(tx.ReqBody))
-		}
+		builder.Write(prettyJSON(tx.ReqBody))
 	}
 	return builder.String()
 }
