@@ -168,7 +168,7 @@ func (t *DataTable) rowCount() int {
 
 func (t *DataTable) visibleSlots() int {
 	if t.rend == nil {
-		return 0
+		return 1
 	}
 	availHeight := t.rend.size.Height - dtHdrH
 	if availHeight < 0 {
@@ -520,6 +520,11 @@ func (r *dtRenderer) updateCells() {
 			continue
 		}
 		for col, cellText := range r.cellTexts[slot] {
+			if col >= len(r.table.colWidths) {
+				cellText.Text = ""
+				cellText.Refresh()
+				continue
+			}
 			if r.table.CellValue != nil {
 				cellText.Text = truncateText(r.table.CellValue(dataIdx, col), cellText.TextSize, cellText.TextStyle, r.table.colWidths[col]-dtPadX*2)
 			}

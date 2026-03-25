@@ -89,6 +89,7 @@ type TextView struct {
 	lastWrapWidth float32        // wrap width used for the last parse pass
 	pendingText   string         // text waiting to be parsed once width is known
 	processing    bool           // true while the background parse goroutine is running
+	gen           int64
 }
 
 func NewTextView() *TextView {
@@ -132,13 +133,19 @@ func (view *TextView) GetText() string {
 
 func (view *TextView) startProcessing(s string, wrapWidth float32) {
 	view.mu.Lock()
+	view.gen++
+	currentGen := view.gen
 	view.processing = true
 	view.mu.Unlock()
 
-	go func() {
+	go func(gen int64) {
 		parsedLines := parseAndWrap(s, wrapWidth)
 		fyne.Do(func() {
 			view.mu.Lock()
+			if gen != view.gen {
+				view.mu.Unlock()
+				return
+			}
 			view.lines = parsedLines
 			view.processing = false
 			pending := ""
@@ -153,7 +160,7 @@ func (view *TextView) startProcessing(s string, wrapWidth float32) {
 			}
 			view.Refresh()
 		})
-	}()
+	}(currentGen)
 }
 
 // CreateRenderer implements fyne.Widget.

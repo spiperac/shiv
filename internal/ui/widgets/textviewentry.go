@@ -31,7 +31,7 @@ type TextViewEntry struct {
 	// OnSend is called when the user presses Ctrl+S.
 	OnSend func()
 
-	mu      sync.Mutex
+	mu      sync.RWMutex
 	rawFull string
 
 	scrollOffset int
@@ -94,7 +94,7 @@ func (e *TextViewEntry) AcceptsTab() bool        { return true }
 
 func (e *TextViewEntry) GetText() string {
 	e.mu.Lock()
-	defer e.mu.Unlock()
+	defer e.mu.RUnlock()
 	return e.rawFull
 }
 
@@ -126,9 +126,9 @@ func splitRaw(raw string) []string {
 
 // logicalLines returns the current logical lines. Caller must not hold mu.
 func (e *TextViewEntry) logicalLines() []string {
-	e.mu.Lock()
+	e.mu.RLock()
 	raw := e.rawFull
-	e.mu.Unlock()
+	e.mu.RUnlock()
 	return splitRaw(raw)
 }
 
@@ -259,15 +259,11 @@ func logicalToVisual(visual []tveVisualLine, logicalLine, logicalCol int) (int, 
 		chunkEnd := vl.colOffset + chunkLen
 		isLastChunk := v+1 >= len(visual) || visual[v+1].logicalIdx != logicalLine
 
-		if logicalCol >= vl.colOffset && (logicalCol < chunkEnd || isLastChunk) {
-			col := logicalCol - vl.colOffset
-			if col < 0 {
-				col = 0
-			}
-			if col > chunkLen {
-				col = chunkLen
-			}
-			return v, col
+		if logicalCol >= vl.colOffset && logicalCol < chunkEnd {
+			return v, logicalCol - vl.colOffset
+		}
+		if isLastChunk && logicalCol >= chunkEnd {
+			return v, chunkLen
 		}
 		lastMatchV = v
 	}
@@ -369,7 +365,9 @@ func (e *TextViewEntry) startBlink() {
 	resetCh := make(chan struct{}, 1)
 	e.blinkReset = resetCh
 	e.blinkRunning = true
+	e.mu.Lock()
 	e.cursorVisible = true
+	e.mu.Unlock()
 	go func() {
 		ticker := time.NewTicker(500 * time.Millisecond)
 		defer ticker.Stop()
@@ -381,11 +379,17 @@ func (e *TextViewEntry) startBlink() {
 					return
 				}
 				// Reset: make cursor visible and restart the ticker.
-				fyne.Do(func() { e.cursorVisible = true })
+				fyne.Do(func() {
+					e.mu.Lock()
+					e.cursorVisible = true
+					e.mu.Unlock()
+				})
 				ticker.Reset(500 * time.Millisecond)
 			case <-ticker.C:
 				fyne.Do(func() {
+					e.mu.Lock()
 					e.cursorVisible = !e.cursorVisible
+					e.mu.Unlock()
 					e.Refresh()
 				})
 			}
@@ -399,7 +403,9 @@ func (e *TextViewEntry) stopBlink() {
 		e.blinkReset = nil
 	}
 	e.blinkRunning = false
+	e.mu.Lock()
 	e.cursorVisible = false
+	e.mu.Unlock()
 }
 
 // resetBlink makes the cursor immediately visible and resets the blink timer.
@@ -420,6 +426,7 @@ func (e *TextViewEntry) resetBlink() {
 // --------------------------------------------------------------------------
 
 func (e *TextViewEntry) CreateRenderer() fyne.WidgetRenderer {
+	e.stopBlink()
 	r := newTVERenderer(e)
 	e.rend = r
 	return r
@@ -733,7 +740,7 @@ func (e *TextViewEntry) TypedKey(ev *fyne.KeyEvent) {
 			// Preserve cursor at whichever end it was before.
 			if prevCL == startLine {
 				e.cursorLine = startLine
-				e.cursorCol = selStartCol + tveTabWidth
+				e.cursorCol = prevCC + tveTabWidth
 			} else {
 				e.cursorLine = endLine
 				e.cursorCol = selEndCol + tveTabWidth
