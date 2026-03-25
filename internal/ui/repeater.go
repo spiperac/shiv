@@ -124,7 +124,8 @@ func (r *repeaterTab) AddTab(name, host string, port int, useTLS bool, rawReques
 }
 
 func (r *repeaterTab) buildTabItem(tab store.RepeaterTab) *container.TabItem {
-	reqEditor := newRepeaterEntry()
+	reqEditor := widgets.NewTextViewEntry()
+	reqEditor.SetWindow(r.win)
 	reqEditor.SetPlaceHolder("Paste or edit raw HTTP request here...")
 
 	respLabel := widgets.NewTextView()
@@ -159,7 +160,7 @@ func (r *repeaterTab) buildTabItem(tab store.RepeaterTab) *container.TabItem {
 		if sendBtn.Disabled() {
 			return
 		}
-		rawReq := reqEditor.Text
+		rawReq := reqEditor.GetText()
 		host, port, useTLS := parseHostFromRaw(rawReq)
 		if host == "" {
 			respLabel.SetText("Error: no Host header found in request")
@@ -190,7 +191,7 @@ func (r *repeaterTab) buildTabItem(tab store.RepeaterTab) *container.TabItem {
 	sendBtn.OnTapped = doSend
 
 	cloneBtn := widget.NewButtonWithIcon("Clone", theme.ContentCopyIcon(), func() {
-		raw := reqEditor.Text
+		raw := reqEditor.GetText()
 		firstLine := strings.SplitN(raw, "\n", 2)[0]
 		parts := strings.Fields(firstLine)
 		name := tab.Name
@@ -212,7 +213,7 @@ func (r *repeaterTab) buildTabItem(tab store.RepeaterTab) *container.TabItem {
 	)
 
 	reqPane := container.NewBorder(newBoldLabel("Request"), nil, nil, nil,
-		container.NewScroll(reqEditor))
+		reqEditor.Build())
 
 	respPane := container.NewBorder(newBoldLabel("Response"), nil, nil, nil,
 		respLabel.Build())
@@ -379,17 +380,4 @@ func parseHostFromRaw(raw string) (host string, port int, useTLS bool) {
 		}
 	}
 	return "", 0, false
-}
-
-type repeaterEntry struct {
-	widget.Entry
-}
-
-func newRepeaterEntry() *repeaterEntry {
-	e := &repeaterEntry{}
-	e.ExtendBaseWidget(e)
-	e.MultiLine = true
-	e.TextStyle = fyne.TextStyle{Monospace: true}
-	e.Wrapping = fyne.TextWrapBreak
-	return e
 }
