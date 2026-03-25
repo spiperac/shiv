@@ -349,10 +349,7 @@ func wrapTokens(tokens []tvToken, rawLine string, charsPerLine int) []tvLine {
 				spaceLeft = charsPerLine
 			}
 
-			n := len(runes)
-			if n > spaceLeft {
-				n = spaceLeft
-			}
+			n := min(len(runes), spaceLeft)
 
 			current = append(current, tvToken{
 				Text: string(runes[:n]),

@@ -134,7 +134,7 @@ func (s *Store) AllTransactions() ([]Transaction, error) {
 
 func scanTransactions(rows interface {
 	Next() bool
-	Scan(...interface{}) error
+	Scan(...any) error
 	Err() error
 }) ([]Transaction, error) {
 	var txs []Transaction

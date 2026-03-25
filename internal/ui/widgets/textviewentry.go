@@ -55,6 +55,9 @@ type TextViewEntry struct {
 	blinkReset    chan struct{} // send to reset blink timer; close to stop goroutine
 	blinkRunning  bool
 
+	dragging         bool // true while mouse drag is in progress — guards FocusLost
+	scrollbarHovered bool // true while mouse is over scrollbar — widens thumb
+
 	// Visual line cache. Invalidated by setting visualCacheRaw = "".
 	// Protected by mu — both raw snapshot and built result stored together so
 	// there is no TOCTOU window.
@@ -712,17 +715,29 @@ func (e *TextViewEntry) TypedKey(ev *fyne.KeyEvent) {
 		prevRaw := strings.Join(lines, "\n")
 		prevCL, prevCC := e.cursorLine, e.cursorCol
 		if e.hasSelection {
-			startLine, _, endLine, _ := e.normaliseSelection()
+			startLine, selStartCol, endLine, selEndCol := e.normaliseSelection()
 			indent := strings.Repeat(" ", tveTabWidth)
 			for i := startLine; i <= endLine; i++ {
 				lines[i] = indent + lines[i]
 			}
 			e.pushUndo(prevRaw, prevCL, prevCC)
 			e.commitLines(lines)
-			e.selAnchorCol += tveTabWidth
+			e.selAnchorLine = startLine
+			if selStartCol > 0 {
+				e.selAnchorCol = selStartCol + tveTabWidth
+			} else {
+				e.selAnchorCol = 0
+			}
 			e.selLine = endLine
-			e.selCol += tveTabWidth
-			e.cursorCol += tveTabWidth
+			e.selCol = selEndCol + tveTabWidth
+			// Preserve cursor at whichever end it was before.
+			if prevCL == startLine {
+				e.cursorLine = startLine
+				e.cursorCol = selStartCol + tveTabWidth
+			} else {
+				e.cursorLine = endLine
+				e.cursorCol = selEndCol + tveTabWidth
+			}
 		} else {
 			indent := strings.Repeat(" ", tveTabWidth)
 			newRunes := make([]rune, 0, len(runes)+tveTabWidth)
@@ -1023,7 +1038,11 @@ func (e *TextViewEntry) FocusGained() {
 func (e *TextViewEntry) FocusLost() {
 	e.stopBlink()
 	e.shiftHeld = false
-	e.shiftSelecting = false
+	// Only clear selection state if we are not mid-drag. When dragging outside
+	// the window Fyne fires FocusLost but the user is still interacting.
+	if !e.dragging {
+		e.shiftSelecting = false
+	}
 	e.Refresh()
 }
 
@@ -1322,10 +1341,14 @@ func (r *tveRenderer) layoutContent() {
 
 func (r *tveRenderer) layoutScrollbar(totalLines int) {
 	bodyHeight := r.size.Height - tvPadY*2
-	trackX := r.size.Width - tvScrollW
-
+	trackW := float32(tvScrollW)
+	trackX := r.size.Width - trackW
+	if r.entry.scrollbarHovered {
+		trackW = tvScrollW + 6
+		trackX = r.size.Width - trackW
+	}
 	r.scrollTrack.Move(fyne.NewPos(trackX, tvPadY))
-	r.scrollTrack.Resize(fyne.NewSize(tvScrollW, bodyHeight))
+	r.scrollTrack.Resize(fyne.NewSize(trackW, bodyHeight))
 
 	visibleLines := int(bodyHeight / tvLineH)
 	if totalLines <= visibleLines {
@@ -1347,10 +1370,16 @@ func (r *tveRenderer) layoutScrollbar(totalLines int) {
 	scrollable := float32(totalLines - visibleLines)
 	thumbY := tvPadY + (float32(r.entry.scrollOffset)/scrollable)*(bodyHeight-thumbHeight)
 
-	r.scrollThumb.Move(fyne.NewPos(trackX+1, thumbY))
-	r.scrollThumb.Resize(fyne.NewSize(tvScrollW-2, thumbHeight))
+	thumbW := float32(tvScrollW - 2)
+	thumbX := trackX + 1
+	if r.entry.scrollbarHovered {
+		thumbW = trackW - 2
+		thumbX = trackX + 1
+	}
+	r.scrollThumb.Move(fyne.NewPos(thumbX, thumbY))
+	r.scrollThumb.Resize(fyne.NewSize(thumbW, thumbHeight))
 	r.scrollThumb.FillColor = theme.Color(theme.ColorNameForeground)
-	r.scrollThumb.CornerRadius = (tvScrollW - 2) / 2
+	r.scrollThumb.CornerRadius = thumbW / 2
 	r.scrollThumb.Refresh()
 }
 
@@ -1362,6 +1391,7 @@ type tveInputLayer struct {
 	widget.BaseWidget
 	entry         *TextViewEntry
 	draggingThumb bool
+	draggingText  bool
 }
 
 func newTVEInputLayer(entry *TextViewEntry) *tveInputLayer {
@@ -1413,6 +1443,7 @@ func (layer *tveInputLayer) MouseDown(ev *desktop.MouseEvent) {
 	entry.hasSelection = false
 	entry.shiftSelecting = false
 	entry.shiftHeld = false
+	entry.dragging = false
 	entry.resetBlink()
 	entry.Refresh()
 	if entry.win != nil {
@@ -1422,6 +1453,8 @@ func (layer *tveInputLayer) MouseDown(ev *desktop.MouseEvent) {
 
 func (layer *tveInputLayer) MouseUp(_ *desktop.MouseEvent) {
 	layer.draggingThumb = false
+	layer.draggingText = false
+	layer.entry.dragging = false
 }
 
 func (layer *tveInputLayer) Tapped(_ *fyne.PointEvent) {}
@@ -1456,14 +1489,6 @@ func (layer *tveInputLayer) DoubleTapped(ev *fyne.PointEvent) {
 	entry.cursorLine, entry.cursorCol = line, wordEnd
 	entry.hasSelection = wordStart != wordEnd
 	entry.Refresh()
-}
-
-func (layer *tveInputLayer) Dragged(ev *fyne.DragEvent) {
-	if layer.draggingThumb {
-		layer.dragScrollbar(ev)
-		return
-	}
-	layer.entry.Dragged(ev)
 }
 
 func (layer *tveInputLayer) dragScrollbar(ev *fyne.DragEvent) {
@@ -1501,11 +1526,43 @@ func (layer *tveInputLayer) dragScrollbar(ev *fyne.DragEvent) {
 	entry.Refresh()
 }
 
-func (layer *tveInputLayer) DragEnd() { layer.draggingThumb = false }
+func (layer *tveInputLayer) Dragged(ev *fyne.DragEvent) {
+	if layer.draggingThumb {
+		layer.dragScrollbar(ev)
+		return
+	}
+	layer.draggingText = true
+	layer.entry.dragging = true
+	layer.entry.Dragged(ev)
+}
 
-func (layer *tveInputLayer) MouseIn(_ *desktop.MouseEvent)    {}
-func (layer *tveInputLayer) MouseOut()                        {}
-func (layer *tveInputLayer) MouseMoved(_ *desktop.MouseEvent) {}
+func (layer *tveInputLayer) DragEnd() {
+	wasDraggingText := layer.draggingText
+	layer.draggingThumb = false
+	layer.draggingText = false
+	layer.entry.dragging = false
+	if wasDraggingText && layer.entry.win != nil {
+		layer.entry.win.Canvas().Focus(layer.entry)
+		layer.entry.resetBlink()
+	}
+}
+
+func (layer *tveInputLayer) MouseIn(_ *desktop.MouseEvent) {}
+
+func (layer *tveInputLayer) MouseOut() {
+	if layer.entry.scrollbarHovered {
+		layer.entry.scrollbarHovered = false
+		layer.entry.Refresh()
+	}
+}
+
+func (layer *tveInputLayer) MouseMoved(ev *desktop.MouseEvent) {
+	inScrollbar := layer.inScrollbarArea(ev.Position.X)
+	if inScrollbar != layer.entry.scrollbarHovered {
+		layer.entry.scrollbarHovered = inScrollbar
+		layer.entry.Refresh()
+	}
+}
 
 func tveIsWordRune(r rune) bool {
 	return unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_' || r == '-'
