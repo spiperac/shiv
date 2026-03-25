@@ -238,7 +238,17 @@ func tokeniseJSON(line string) []tvToken {
 		switch {
 		case ch == '"':
 			end := pos + 1
-			for end < len(runes) && !(runes[end] == '"' && runes[end-1] != '\\') {
+			for end < len(runes) {
+				if runes[end] == '"' {
+					// Count preceding backslashes — even count means quote is unescaped.
+					numBackslashes := 0
+					for i := end - 1; i >= pos && runes[i] == '\\'; i-- {
+						numBackslashes++
+					}
+					if numBackslashes%2 == 0 {
+						break
+					}
+				}
 				end++
 			}
 			if end < len(runes) {
