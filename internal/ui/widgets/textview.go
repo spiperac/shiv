@@ -138,18 +138,21 @@ func (view *TextView) startProcessing(s string, wrapWidth float32) {
 	view.processing = true
 	view.mu.Unlock()
 
-	go func(gen int64) {
-		parsedLines := parseAndWrap(s, wrapWidth)
+	go func(gen int64, text string, width float32) {
+		parsedLines := parseAndWrap(text, width)
+
 		fyne.Do(func() {
 			view.mu.Lock()
 			if gen != view.gen {
 				view.mu.Unlock()
 				return
 			}
+
 			view.lines = parsedLines
 			view.processing = false
+
 			pending := ""
-			if view.pendingText != s {
+			if view.pendingText != text {
 				pending = view.pendingText
 			}
 			latestWidth := view.lastWrapWidth
@@ -158,9 +161,10 @@ func (view *TextView) startProcessing(s string, wrapWidth float32) {
 			if pending != "" && latestWidth > 0 {
 				view.startProcessing(pending, latestWidth)
 			}
+
 			view.Refresh()
 		})
-	}(currentGen)
+	}(currentGen, s, wrapWidth)
 }
 
 // CreateRenderer implements fyne.Widget.
@@ -176,15 +180,9 @@ func (view *TextView) CreateRenderer() fyne.WidgetRenderer {
 
 // Scrolled implements fyne.Scrollable.
 func (view *TextView) Scrolled(ev *fyne.ScrollEvent) {
-	view.mu.RLock()
-	totalLines := len(view.lines)
-	view.mu.RUnlock()
+	view.mu.Lock()
 
-	visibleLines := view.visibleLineCount()
-	maxOffset := totalLines - visibleLines
-	if maxOffset < 0 {
-		maxOffset = 0
-	}
+	totalLines := len(view.lines)
 
 	view.scrollFrac -= ev.Scrolled.DY / tvLineH
 	rows := int(view.scrollFrac)
@@ -197,12 +195,17 @@ func (view *TextView) Scrolled(ev *fyne.ScrollEvent) {
 		}
 	}
 	view.scrollOffset += rows
+
+	visible := view.visibleLineCount()
+	maxOffset := max(totalLines-visible, 0)
 	if view.scrollOffset < 0 {
 		view.scrollOffset = 0
 	}
 	if view.scrollOffset > maxOffset {
 		view.scrollOffset = maxOffset
 	}
+
+	view.mu.Unlock()
 	view.Refresh()
 }
 
@@ -224,10 +227,7 @@ func (view *TextView) posFromPoint(point fyne.Position) (line, col int) {
 	totalLines := len(view.lines)
 	view.mu.RUnlock()
 
-	lineIdx := view.scrollOffset + int((point.Y-tvPadY)/tvLineH)
-	if lineIdx < 0 {
-		lineIdx = 0
-	}
+	lineIdx := max(view.scrollOffset+int((point.Y-tvPadY)/tvLineH), 0)
 	if lineIdx >= totalLines {
 		lineIdx = totalLines - 1
 	}
@@ -247,13 +247,7 @@ func (view *TextView) posFromPoint(point fyne.Position) (line, col int) {
 	if charWidth <= 0 {
 		charWidth = theme.TextSize() * 0.6
 	}
-	col = int((point.X - tvPadX) / charWidth)
-	if col < 0 {
-		col = 0
-	}
-	if col > len(runes) {
-		col = len(runes)
-	}
+	col = min(max(int((point.X-tvPadX)/charWidth), 0), len(runes))
 	return lineIdx, col
 }
 
@@ -521,7 +515,9 @@ func (thumb *tvScrollThumb) Dragged(ev *fyne.DragEvent) {
 		newThumbTop = trackHeight
 	}
 
+	view.mu.Lock()
 	view.scrollOffset = int((newThumbTop / trackHeight) * float32(scrollable))
+	view.mu.Unlock()
 	view.Refresh()
 }
 
@@ -611,21 +607,23 @@ func (renderer *tvRenderer) growSlots() {
 	}
 	needed := int(bodyHeight/tvLineH) + 2
 
+	// grow
 	for renderer.slots < needed {
 		selBg := canvas.NewRectangle(color.Transparent)
 		renderer.selBgs = append(renderer.selBgs, selBg)
 
-		tokenSlot := make([]*canvas.Text, tvMaxTokensPerLine)
-		for i := range tokenSlot {
-			tokenText := canvas.NewText("", color.White)
-			tokenText.TextStyle = fyne.TextStyle{Monospace: true}
-			tokenText.TextSize = theme.TextSize()
-			tokenSlot[i] = tokenText
+		slot := make([]*canvas.Text, tvMaxTokensPerLine)
+		for i := range slot {
+			t := canvas.NewText("", color.Transparent)
+			t.TextSize = theme.TextSize()
+			slot[i] = t
 		}
-		renderer.tokenSlots = append(renderer.tokenSlots, tokenSlot)
+		renderer.tokenSlots = append(renderer.tokenSlots, slot)
+
 		renderer.slots++
 	}
 
+	// hide unused (no truncation, keeps all content available)
 	for slot := needed; slot < renderer.slots; slot++ {
 		renderer.selBgs[slot].Hide()
 		for _, tokenText := range renderer.tokenSlots[slot] {

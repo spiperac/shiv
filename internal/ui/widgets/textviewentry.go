@@ -93,7 +93,7 @@ func (e *TextViewEntry) SetPlaceHolder(_ string) {}
 func (e *TextViewEntry) AcceptsTab() bool        { return true }
 
 func (e *TextViewEntry) GetText() string {
-	e.mu.Lock()
+	e.mu.RLock()
 	defer e.mu.RUnlock()
 	return e.rawFull
 }
