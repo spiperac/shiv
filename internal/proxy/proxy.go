@@ -103,6 +103,7 @@ func (p *Proxy) Stop() {
 }
 
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	defer recoverPanic("ServeHTTP " + r.URL.String())
 	if r.Method == http.MethodConnect {
 		p.handleConnect(w, r)
 		return

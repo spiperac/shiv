@@ -370,6 +370,7 @@ func (h *historyTab) applyFilter() {
 }
 
 func (h *historyTab) watchUpdates() {
+	defer recoverPanic("watchUpdates")
 	for tx := range h.projectStore.Updates {
 		transaction := tx
 		fyne.Do(func() {

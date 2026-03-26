@@ -17,6 +17,7 @@ import (
 )
 
 func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
+	defer recoverPanic("ServeHTTP " + r.URL.String())
 	w.WriteHeader(http.StatusOK)
 	if flusher, ok := w.(http.Flusher); ok {
 		flusher.Flush()
