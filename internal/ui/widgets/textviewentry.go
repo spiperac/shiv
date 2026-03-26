@@ -162,6 +162,7 @@ func (e *TextViewEntry) visual() []tveVisualLine {
 func (e *TextViewEntry) commitLines(lines []string) {
 	e.mu.Lock()
 	e.rawFull = strings.Join(lines, "\n")
+	e.visualCacheRaw = ""
 	e.visualCacheValid = false
 	e.mu.Unlock()
 }
