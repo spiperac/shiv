@@ -93,10 +93,7 @@ func parseAndWrap(s string, wrapWidth float32) []tvLine {
 	if charWidth <= 0 {
 		charWidth = theme.TextSize() * 0.6
 	}
-	charsPerLine := int(wrapWidth / charWidth)
-	if charsPerLine < 10 {
-		charsPerLine = 10
-	}
+	charsPerLine := max(int(wrapWidth/charWidth), 10)
 
 	bodyContentType := detectContentType(logicalLines)
 
@@ -104,7 +101,7 @@ func parseAndWrap(s string, wrapWidth float32) []tvLine {
 	inBody := false
 
 	for i, rawLine := range logicalLines {
-		if !inBody && rawLine == "" && i > 0 {
+		if !inBody && strings.TrimSpace(rawLine) == "" && i > 0 {
 			inBody = true
 			result = append(result, tvLine{Tokens: []tvToken{{Text: "", Kind: tvKindPlain}}, Raw: ""})
 			continue
@@ -152,14 +149,14 @@ func tokeniseHTTPMeta(line string, isFirstLine bool) []tvToken {
 	if isFirstLine {
 		return tokeniseFirstLine(line)
 	}
-	colonIdx := strings.Index(line, ":")
-	if colonIdx < 0 {
+	before, after, ok := strings.Cut(line, ":")
+	if !ok {
 		return []tvToken{{Text: line, Kind: tvKindPlain}}
 	}
 	return []tvToken{
-		{Text: line[:colonIdx], Kind: tvKindHdrName},
+		{Text: before, Kind: tvKindHdrName},
 		{Text: ":", Kind: tvKindHdrColon},
-		{Text: line[colonIdx+1:], Kind: tvKindHdrValue},
+		{Text: after, Kind: tvKindHdrValue},
 	}
 }
 
@@ -238,7 +235,17 @@ func tokeniseJSON(line string) []tvToken {
 		switch {
 		case ch == '"':
 			end := pos + 1
-			for end < len(runes) && !(runes[end] == '"' && runes[end-1] != '\\') {
+			for end < len(runes) {
+				if runes[end] == '"' {
+					// Count preceding backslashes — even count means quote is unescaped.
+					numBackslashes := 0
+					for i := end - 1; i >= pos && runes[i] == '\\'; i-- {
+						numBackslashes++
+					}
+					if numBackslashes%2 == 0 {
+						break
+					}
+				}
 				end++
 			}
 			if end < len(runes) {
@@ -339,10 +346,7 @@ func wrapTokens(tokens []tvToken, rawLine string, charsPerLine int) []tvLine {
 				spaceLeft = charsPerLine
 			}
 
-			n := len(runes)
-			if n > spaceLeft {
-				n = spaceLeft
-			}
+			n := min(len(runes), spaceLeft)
 
 			current = append(current, tvToken{
 				Text: string(runes[:n]),

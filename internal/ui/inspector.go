@@ -30,7 +30,13 @@ func showInspectorDialog(tx store.Transaction, win fyne.Window) {
 	contentType := tx.RespHeaders.Get("Content-Type")
 	if strings.Contains(contentType, "application/json") && len(tx.RespBody) > 0 {
 		jsonEntry := widgets.NewTextView()
-		jsonEntry.SetText(string(prettyJSON(tx.RespBody)))
+		body := tx.RespBody
+		if idx := strings.Index(string(body), "\r\n\r\n"); idx >= 0 {
+			body = body[idx+4:]
+		} else if idx := strings.Index(string(body), "\n\n"); idx >= 0 {
+			body = body[idx+2:]
+		}
+		jsonEntry.SetText(string(prettyJSON(body)))
 		tabs.Append(container.NewTabItem("JSON", jsonEntry.Build()))
 	}
 

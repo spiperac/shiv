@@ -39,7 +39,7 @@ type intruderTab struct {
 	repeater     *repeaterTab
 	loot         *lootTab
 
-	reqEditor     *repeaterEntry
+	reqEditor     *widgets.TextViewEntry
 	payloadEntry  *widget.Entry
 	filterEntry   *widget.Entry
 	startBtn      *widget.Button
@@ -132,7 +132,7 @@ func (t *intruderTab) showConfigDialog() {
 		if timeout, err := strconv.Atoi(strings.TrimSpace(timeoutEntry.Text)); err == nil && timeout > 0 {
 			t.config.TimeoutMs = timeout
 		}
-		t.config.RawRequest = t.reqEditor.Text
+		t.config.RawRequest = t.reqEditor.GetText()
 		t.config.Payloads = t.payloadEntry.Text
 		t.projectStore.SaveIntruderConfig(t.config)
 	}, t.win)
@@ -142,7 +142,8 @@ func (t *intruderTab) showConfigDialog() {
 }
 
 func (t *intruderTab) build() fyne.CanvasObject {
-	t.reqEditor = newRepeaterEntry()
+	t.reqEditor = widgets.NewTextViewEntry()
+	t.reqEditor.SetWindow(t.win)
 	t.reqEditor.SetPlaceHolder("Paste raw HTTP request here, mark injection points with $<n>\n\nExample:\nGET /search?q=$<query> HTTP/1.1\nHost: example.com")
 	t.reqEditor.SetText(t.config.RawRequest)
 
@@ -299,9 +300,6 @@ func (t *intruderTab) build() fyne.CanvasObject {
 		}
 		return widget.MediumImportance
 	}
-	// intruderResult has no persistent ID from the store; use the row index
-	// cast to int64.  Results are append-only during an attack and are
-	// cleared atomically, so index stability holds within a single run.
 	t.table.RowID = func(row int) int64 {
 		return int64(row)
 	}
@@ -325,8 +323,17 @@ func (t *intruderTab) build() fyne.CanvasObject {
 			t.requestPane.SetText(result.rawReq)
 		}
 	}
-	// Intruder results have no right-click menu (actions are via toolbar buttons).
-	t.table.MenuItems = nil
+
+	t.table.MenuItems = func(row int) []widgets.ContextMenuItem {
+		t.mu.RLock()
+		if row >= len(t.filtered) {
+			t.mu.RUnlock()
+			return nil
+		}
+		result := t.filtered[row]
+		t.mu.RUnlock()
+		return t.contextMenuItems(result)
+	}
 
 	tableObj := t.table.Build()
 
@@ -352,7 +359,7 @@ func (t *intruderTab) build() fyne.CanvasObject {
 	reqPane := container.NewBorder(
 		newBoldLabel("Request"),
 		nil, nil, nil,
-		container.NewScroll(t.reqEditor),
+		t.reqEditor.Build(),
 	)
 
 	payloadPane := container.NewBorder(
@@ -460,7 +467,7 @@ func (t *intruderTab) followRedirect(rawResp string, originalHost string) (strin
 }
 
 func (t *intruderTab) startAttack() {
-	rawReq := t.reqEditor.Text
+	rawReq := t.reqEditor.GetText()
 	if rawReq == "" {
 		dialog.ShowInformation("Error", "Please enter a request.", t.win)
 		return
@@ -631,4 +638,39 @@ func (t *intruderTab) applyFilter() {
 	t.mu.Unlock()
 
 	t.table.Refresh()
+}
+
+func (t *intruderTab) contextMenuItems(result intruderResult) []widgets.ContextMenuItem {
+	return []widgets.ContextMenuItem{
+		{
+			Label: "Send to Repeater",
+			Action: func() {
+				host, port, useTLS := parseHostFromRaw(result.rawReq)
+				path := pathOf(extractURLFromRaw(result.rawReq))
+				if len(path) > 20 {
+					path = path[:20] + "..."
+				}
+				name := fmt.Sprintf("Intruder %s", path)
+				t.repeater.AddTab(name, host, port, useTLS, result.rawReq)
+			},
+		},
+		{
+			Label: "Send to Loot",
+			Action: func() {
+				t.loot.showAddDialog(nil, result.rawReq, result.rawResp)
+			},
+		},
+		{
+			Label: "Copy Request",
+			Action: func() {
+				fyne.CurrentApp().Clipboard().SetContent(result.rawReq)
+			},
+		},
+		{
+			Label: "Copy Response",
+			Action: func() {
+				fyne.CurrentApp().Clipboard().SetContent(result.rawResp)
+			},
+		},
+	}
 }

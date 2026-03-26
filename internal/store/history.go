@@ -65,11 +65,35 @@ func (s *Store) Log(t Transaction) error {
 	).Scan(&existingID)
 
 	if err == nil {
+		// Row exists — update ALL fields so the new request body, headers,
+		// response body, and duration are persisted. Previously only timestamp
+		// was written here, which caused stale request bodies to be shown.
 		return s.write(func() error {
-			_, err := s.db.Exec(`UPDATE history SET timestamp = ? WHERE id = ?`,
-				t.Timestamp.UTC().Format(time.RFC3339), existingID)
+			reqH, err := json.Marshal(t.ReqHeaders)
 			if err != nil {
-				return fmt.Errorf("store: update timestamp: %w", err)
+				return fmt.Errorf("store: marshal req headers: %w", err)
+			}
+			respH, err := json.Marshal(t.RespHeaders)
+			if err != nil {
+				return fmt.Errorf("store: marshal resp headers: %w", err)
+			}
+			_, err = s.db.Exec(`
+				UPDATE history SET
+					timestamp    = ?,
+					req_headers  = ?,
+					req_body     = ?,
+					resp_headers = ?,
+					resp_body    = ?,
+					duration_ms  = ?
+				WHERE id = ?`,
+				t.Timestamp.UTC().Format(time.RFC3339),
+				string(reqH), t.ReqBody,
+				string(respH), t.RespBody,
+				t.DurationMs,
+				existingID,
+			)
+			if err != nil {
+				return fmt.Errorf("store: update transaction: %w", err)
 			}
 			t.ID = existingID
 			select {
@@ -134,7 +158,7 @@ func (s *Store) AllTransactions() ([]Transaction, error) {
 
 func scanTransactions(rows interface {
 	Next() bool
-	Scan(...interface{}) error
+	Scan(...any) error
 	Err() error
 }) ([]Transaction, error) {
 	var txs []Transaction

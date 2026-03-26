@@ -124,7 +124,8 @@ func (r *repeaterTab) AddTab(name, host string, port int, useTLS bool, rawReques
 }
 
 func (r *repeaterTab) buildTabItem(tab store.RepeaterTab) *container.TabItem {
-	reqEditor := newRepeaterEntry()
+	reqEditor := widgets.NewTextViewEntry()
+	reqEditor.SetWindow(r.win)
 	reqEditor.SetPlaceHolder("Paste or edit raw HTTP request here...")
 
 	respLabel := widgets.NewTextView()
@@ -159,7 +160,7 @@ func (r *repeaterTab) buildTabItem(tab store.RepeaterTab) *container.TabItem {
 		if sendBtn.Disabled() {
 			return
 		}
-		rawReq := reqEditor.Text
+		rawReq := reqEditor.GetText()
 		host, port, useTLS := parseHostFromRaw(rawReq)
 		if host == "" {
 			respLabel.SetText("Error: no Host header found in request")
@@ -190,7 +191,7 @@ func (r *repeaterTab) buildTabItem(tab store.RepeaterTab) *container.TabItem {
 	sendBtn.OnTapped = doSend
 
 	cloneBtn := widget.NewButtonWithIcon("Clone", theme.ContentCopyIcon(), func() {
-		raw := reqEditor.Text
+		raw := reqEditor.GetText()
 		firstLine := strings.SplitN(raw, "\n", 2)[0]
 		parts := strings.Fields(firstLine)
 		name := tab.Name
@@ -212,7 +213,7 @@ func (r *repeaterTab) buildTabItem(tab store.RepeaterTab) *container.TabItem {
 	)
 
 	reqPane := container.NewBorder(newBoldLabel("Request"), nil, nil, nil,
-		container.NewScroll(reqEditor))
+		reqEditor.Build())
 
 	respPane := container.NewBorder(newBoldLabel("Response"), nil, nil, nil,
 		respLabel.Build())
@@ -367,29 +368,30 @@ func parseHostFromRaw(raw string) (host string, port int, useTLS bool) {
 		if strings.HasPrefix(strings.ToLower(line), "host:") {
 			hostVal := strings.TrimSpace(line[5:])
 			if hostname, portStr, err := net.SplitHostPort(hostVal); err == nil {
+				// Explicit port in Host header e.g. "192.168.1.1:8080" or "example.com:443"
 				host = hostname
 				port, _ = strconv.Atoi(portStr)
 				useTLS = port == 443
 			} else {
+				// No port — default to 80/HTTP, then check Origin/Referer for https.
 				host = hostVal
-				port = 443
-				useTLS = true
+				port = 80
+				useTLS = false
+				for _, l := range strings.Split(raw, "\n") {
+					l = strings.TrimSpace(l)
+					lower := strings.ToLower(l)
+					if strings.HasPrefix(lower, "origin:") || strings.HasPrefix(lower, "referer:") {
+						val := strings.TrimSpace(l[strings.Index(l, ":")+1:])
+						if strings.HasPrefix(val, "https://") {
+							port = 443
+							useTLS = true
+						}
+						break
+					}
+				}
 			}
 			return
 		}
 	}
 	return "", 0, false
-}
-
-type repeaterEntry struct {
-	widget.Entry
-}
-
-func newRepeaterEntry() *repeaterEntry {
-	e := &repeaterEntry{}
-	e.ExtendBaseWidget(e)
-	e.MultiLine = true
-	e.TextStyle = fyne.TextStyle{Monospace: true}
-	e.Wrapping = fyne.TextWrapBreak
-	return e
 }
