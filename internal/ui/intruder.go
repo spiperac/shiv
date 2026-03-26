@@ -17,6 +17,7 @@ import (
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
+	internalhttp "github.com/shiv/internal/http"
 	"github.com/shiv/internal/store"
 	"github.com/shiv/internal/ui/widgets"
 )
@@ -214,13 +215,12 @@ func (t *intruderTab) build() fyne.CanvasObject {
 		if t.selectedResult == nil {
 			return
 		}
-		host, port, useTLS := parseHostFromRaw(t.selectedResult.rawReq)
-		path := pathOf(extractURLFromRaw(t.selectedResult.rawReq))
+		host, port, useTLS := internalhttp.ParseHostFromRaw(t.selectedResult.rawReq)
+		path := PathOf(extractURLFromRaw(t.selectedResult.rawReq))
 		if len(path) > 20 {
 			path = path[:20] + "..."
 		}
-		name := fmt.Sprintf("Intruder %s", path)
-		t.repeater.AddTab(name, host, port, useTLS, t.selectedResult.rawReq)
+		t.repeater.AddTab(fmt.Sprintf("Intruder %s", path), host, port, useTLS, t.selectedResult.rawReq)
 	})
 	t.sendToRepeaterBtn.Disable()
 
@@ -240,7 +240,6 @@ func (t *intruderTab) build() fyne.CanvasObject {
 	t.requestPane.SetWindow(t.win)
 	t.requestPane.SetPlaceHolder("Select a result to view request...")
 
-	// ── DataTable for results ─────────────────────────────────
 	t.table = widgets.NewDataTable()
 	t.table.SetWindow(t.win)
 	t.table.Columns = intruderColumns
@@ -313,17 +312,11 @@ func (t *intruderTab) build() fyne.CanvasObject {
 		t.mu.RUnlock()
 
 		t.selectedResult = &result
+		t.responsePane.SetText(result.rawResp)
+		t.requestPane.SetText(result.rawReq)
 		t.sendToRepeaterBtn.Enable()
 		t.sendToLootBtn.Enable()
-		if result.err != "" {
-			t.responsePane.SetText("Error: " + result.err)
-			t.requestPane.SetText(result.rawReq)
-		} else {
-			t.responsePane.SetText(result.rawResp)
-			t.requestPane.SetText(result.rawReq)
-		}
 	}
-
 	t.table.MenuItems = func(row int) []widgets.ContextMenuItem {
 		t.mu.RLock()
 		if row >= len(t.filtered) {
@@ -337,38 +330,24 @@ func (t *intruderTab) build() fyne.CanvasObject {
 
 	tableObj := t.table.Build()
 
-	// ── layout ───────────────────────────────────────────────
-
-	respPane := container.NewBorder(
-		container.NewBorder(nil, nil, nil, t.sendToLootBtn, newBoldLabel("Response")),
-		nil, nil, nil,
-		t.responsePane.Build(),
+	detailPane := container.NewHSplit(
+		container.NewBorder(newBoldLabel("Request"), nil, nil, nil, t.requestPane.Build()),
+		container.NewBorder(newBoldLabel("Response"), nil, nil, nil, t.responsePane.Build()),
 	)
-
-	requestPane := container.NewBorder(
-		container.NewBorder(nil, nil, nil, t.sendToRepeaterBtn, newBoldLabel("Request")),
-		nil, nil, nil,
-		t.requestPane.Build(),
-	)
-
-	detailPane := container.NewHSplit(respPane, requestPane)
-	detailPane.SetOffset(0.5)
 
 	toolbar := container.NewHBox(t.startBtn, t.stopBtn, configBtn, clearBtn, t.progressLabel)
 
-	reqPane := container.NewBorder(
-		newBoldLabel("Request"),
-		nil, nil, nil,
-		t.reqEditor.Build(),
-	)
-
 	payloadPane := container.NewBorder(
-		container.NewBorder(nil, nil, nil, loadPayloadsBtn, newBoldLabel("Payloads")),
-		nil, nil, nil,
-		container.NewScroll(t.payloadEntry),
+		newBoldLabel("Payloads"),
+		container.NewHBox(loadPayloadsBtn),
+		nil, nil,
+		t.payloadEntry,
 	)
 
-	configSplit := container.NewHSplit(reqPane, payloadPane)
+	configSplit := container.NewHSplit(
+		container.NewBorder(newBoldLabel("Request"), nil, nil, nil, t.reqEditor.Build()),
+		payloadPane,
+	)
 	configSplit.SetOffset(0.6)
 
 	tablePane := container.NewBorder(
@@ -417,7 +396,6 @@ func (t *intruderTab) followRedirect(rawResp string, originalHost string) (strin
 		if !t.projectStore.InScope(location) {
 			return "", false
 		}
-	case "always":
 	}
 
 	var redirectHost, redirectPath string
@@ -459,11 +437,16 @@ func (t *intruderTab) followRedirect(rawResp string, originalHost string) (strin
 	}
 
 	redirectReq := fmt.Sprintf("GET %s HTTP/1.1\r\nHost: %s\r\n\r\n", redirectPath, redirectHost)
-	resp, err := sendRawRequest(redirectHost, port, useTLS, redirectReq)
+	result, err := internalhttp.SendRaw(internalhttp.RawRequestOptions{
+		Host:   redirectHost,
+		Port:   port,
+		TLS:    useTLS,
+		RawReq: redirectReq,
+	})
 	if err != nil {
 		return "", false
 	}
-	return resp, true
+	return result.Raw, true
 }
 
 func (t *intruderTab) startAttack() {
@@ -543,7 +526,7 @@ func (t *intruderTab) startAttack() {
 				}
 
 				injected := strings.ReplaceAll(rawReq, marker, payload)
-				host, port, useTLS := parseHostFromRaw(injected)
+				host, port, useTLS := internalhttp.ParseHostFromRaw(injected)
 
 				var result intruderResult
 				result.payload = payload
@@ -553,24 +536,30 @@ func (t *intruderTab) startAttack() {
 					result.err = "no Host header found"
 				} else {
 					start := time.Now()
-					resp, err := sendRawRequest(host, port, useTLS, injected)
+					resp, err := internalhttp.SendRaw(internalhttp.RawRequestOptions{
+						Host:   host,
+						Port:   port,
+						TLS:    useTLS,
+						RawReq: injected,
+					})
 					elapsed := time.Since(start).Milliseconds()
 					if err != nil {
 						result.err = err.Error()
 					} else {
+						rawResp := resp.Raw
 						if config.FollowRedirects != "never" && config.MaxRedirects > 0 {
 							for redirectCount := 0; redirectCount < config.MaxRedirects; redirectCount++ {
-								redirectResp, followed := t.followRedirect(resp, host)
+								redirectResp, followed := t.followRedirect(rawResp, host)
 								if !followed {
 									break
 								}
-								resp = redirectResp
+								rawResp = redirectResp
 							}
 						}
 						result.durationMs = elapsed
-						result.size = len(resp)
-						result.rawResp = resp
-						firstLine := strings.SplitN(resp, "\r\n", 2)[0]
+						result.size = len(rawResp)
+						result.rawResp = rawResp
+						firstLine := strings.SplitN(rawResp, "\r\n", 2)[0]
 						parts := strings.Fields(firstLine)
 						if len(parts) >= 2 {
 							fmt.Sscanf(parts[1], "%d", &result.statusCode)
@@ -645,13 +634,12 @@ func (t *intruderTab) contextMenuItems(result intruderResult) []widgets.ContextM
 		{
 			Label: "Send to Repeater",
 			Action: func() {
-				host, port, useTLS := parseHostFromRaw(result.rawReq)
-				path := pathOf(extractURLFromRaw(result.rawReq))
+				host, port, useTLS := internalhttp.ParseHostFromRaw(result.rawReq)
+				path := PathOf(extractURLFromRaw(result.rawReq))
 				if len(path) > 20 {
 					path = path[:20] + "..."
 				}
-				name := fmt.Sprintf("Intruder %s", path)
-				t.repeater.AddTab(name, host, port, useTLS, result.rawReq)
+				t.repeater.AddTab(fmt.Sprintf("Intruder %s", path), host, port, useTLS, result.rawReq)
 			},
 		},
 		{

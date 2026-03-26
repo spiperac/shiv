@@ -15,6 +15,7 @@ import (
 	"fyne.io/fyne/v2/widget"
 
 	"github.com/shiv/assets"
+	internalhttp "github.com/shiv/internal/http"
 	"github.com/shiv/internal/logger"
 	"github.com/shiv/internal/store"
 	"github.com/shiv/internal/ui/widgets"
@@ -64,9 +65,7 @@ func (l *lootTab) build() fyne.CanvasObject {
 	l.table = widgets.NewDataTable()
 	l.table.SetWindow(l.win)
 	l.table.Columns = lootColumns
-	l.table.RowCount = func() int {
-		return len(l.entries)
-	}
+	l.table.RowCount = func() int { return len(l.entries) }
 	l.table.CellValue = func(row, col int) string {
 		if row >= len(l.entries) {
 			return ""
@@ -191,14 +190,9 @@ func (l *lootTab) build() fyne.CanvasObject {
 	})
 	l.viewReqBtn.Disable()
 
-	toolbar := container.NewHBox(addBtn, l.deleteBtn, l.viewReqBtn, l.exportBtn)
-
-	notesPane := container.NewBorder(newBoldLabel("Notes"), nil, nil, nil,
-		l.notesArea.Build())
-
 	split := container.NewVSplit(
-		container.NewBorder(toolbar, nil, nil, nil, tableObj),
-		notesPane,
+		container.NewBorder(container.NewHBox(addBtn, l.deleteBtn, l.viewReqBtn, l.exportBtn), nil, nil, nil, tableObj),
+		container.NewBorder(newBoldLabel("Notes"), nil, nil, nil, l.notesArea.Build()),
 	)
 	split.SetOffset(0.6)
 
@@ -233,31 +227,31 @@ func (l *lootTab) showAddDialog(historyID *uint64, rawRequest string, rawRespons
 		widget.NewFormItem("Notes", notesEntry),
 	)
 
-	sized := container.NewGridWrap(fyne.NewSize(500, 350), form)
-	addLootDialog := dialog.NewCustomConfirm("Add Loot", "Save", "Cancel", sized, func(confirmed bool) {
-		if !confirmed {
-			return
-		}
-		title := strings.TrimSpace(titleEntry.Text)
-		if title == "" {
-			return
-		}
-		entry := store.LootEntry{
-			Title:       title,
-			Severity:    severitySelect.Selected,
-			Notes:       notesEntry.Text,
-			HistoryID:   historyID,
-			RawRequest:  rawRequest,
-			RawResponse: rawResponse,
-		}
-		if _, err := l.projectStore.AddLoot(entry); err != nil {
-			logger.Error("loot: add: %v", err)
-			return
-		}
-		l.reload()
-	}, l.win)
-	closeOnEscape(l.win, addLootDialog.Dismiss)
-	addLootDialog.Show()
+	d := dialog.NewCustomConfirm("Add Loot", "Save", "Cancel",
+		container.NewGridWrap(fyne.NewSize(500, 350), form),
+		func(confirmed bool) {
+			if !confirmed {
+				return
+			}
+			title := strings.TrimSpace(titleEntry.Text)
+			if title == "" {
+				return
+			}
+			if _, err := l.projectStore.AddLoot(store.LootEntry{
+				Title:       title,
+				Severity:    severitySelect.Selected,
+				Notes:       notesEntry.Text,
+				HistoryID:   historyID,
+				RawRequest:  rawRequest,
+				RawResponse: rawResponse,
+			}); err != nil {
+				logger.Error("loot: add: %v", err)
+				return
+			}
+			l.reload()
+		}, l.win)
+	closeOnEscape(l.win, d.Dismiss)
+	d.Show()
 }
 
 func (l *lootTab) exportMarkdown() {
@@ -279,16 +273,12 @@ func (l *lootTab) exportMarkdown() {
 		Request  string
 		Response string
 	}
-
 	type templateData struct {
 		Generated string
 		Entries   []entryData
 	}
 
-	data := templateData{
-		Generated: time.Now().Format("2006-01-02 15:04"),
-	}
-
+	data := templateData{Generated: time.Now().Format("2006-01-02 15:04")}
 	for _, entry := range entries {
 		ed := entryData{
 			Severity: entry.Severity,
@@ -297,10 +287,9 @@ func (l *lootTab) exportMarkdown() {
 			Notes:    entry.Notes,
 		}
 		if entry.HistoryID != nil {
-			tx, err := l.projectStore.GetTransaction(*entry.HistoryID)
-			if err == nil {
-				ed.Request = formatRequest(*tx)
-				ed.Response = formatResponse(*tx)
+			if tx, err := l.projectStore.GetTransaction(*entry.HistoryID); err == nil {
+				ed.Request = FormatRequest(*tx)
+				ed.Response = FormatResponse(*tx)
 			}
 		} else {
 			ed.Request = entry.RawRequest
@@ -323,12 +312,12 @@ func (l *lootTab) exportMarkdown() {
 		return
 	}
 
-	saveDialog := dialog.NewFileSave(func(writeCloser fyne.URIWriteCloser, err error) {
-		if err != nil || writeCloser == nil {
+	saveDialog := dialog.NewFileSave(func(wc fyne.URIWriteCloser, err error) {
+		if err != nil || wc == nil {
 			return
 		}
-		defer writeCloser.Close()
-		if _, err := writeCloser.Write([]byte(builder.String())); err != nil {
+		defer wc.Close()
+		if _, err := wc.Write([]byte(builder.String())); err != nil {
 			logger.Error("loot: write export: %v", err)
 			dialog.ShowError(err, l.win)
 		}
@@ -339,34 +328,26 @@ func (l *lootTab) exportMarkdown() {
 
 func (l *lootTab) showLinkedRequest(entry store.LootEntry) {
 	if entry.HistoryID != nil {
-		l.showLinkedRequestFromHistory(entry)
+		go func() {
+			tx, err := l.projectStore.GetTransaction(*entry.HistoryID)
+			if err != nil {
+				logger.Error("loot: get linked request: %v", err)
+				return
+			}
+			fyne.Do(func() {
+				l.showRequestResponseDialog(
+					fmt.Sprintf("Linked Request — %s %s", tx.Method, tx.URL),
+					FormatRequest(*tx),
+					FormatResponse(*tx),
+					tx.Host,
+					tx.TLS,
+				)
+			})
+		}()
 	} else {
-		l.showLinkedRequestFromRaw(entry)
+		host, _, useTLS := internalhttp.ParseHostFromRaw(entry.RawRequest)
+		l.showRequestResponseDialog("Linked Request", entry.RawRequest, entry.RawResponse, host, useTLS)
 	}
-}
-
-func (l *lootTab) showLinkedRequestFromHistory(entry store.LootEntry) {
-	go func() {
-		tx, err := l.projectStore.GetTransaction(*entry.HistoryID)
-		if err != nil {
-			logger.Error("loot: get linked request: %v", err)
-			return
-		}
-		fyne.Do(func() {
-			l.showRequestResponseDialog(
-				fmt.Sprintf("Linked Request — %s %s", tx.Method, tx.URL),
-				formatRequest(*tx),
-				formatResponse(*tx),
-				tx.Host,
-				tx.TLS,
-			)
-		})
-	}()
-}
-
-func (l *lootTab) showLinkedRequestFromRaw(entry store.LootEntry) {
-	host, _, useTLS := parseHostFromRaw(entry.RawRequest)
-	l.showRequestResponseDialog("Linked Request", entry.RawRequest, entry.RawResponse, host, useTLS)
 }
 
 func (l *lootTab) showRequestResponseDialog(title, rawRequest, rawResponse, host string, useTLS bool) {
@@ -380,20 +361,15 @@ func (l *lootTab) showRequestResponseDialog(title, rawRequest, rawResponse, host
 
 	sendBtn := widget.NewButtonWithIcon("Send to Repeater", theme.MailForwardIcon(), nil)
 
-	reqPane := container.NewBorder(newBoldLabel("Request"), nil, nil, nil,
-		reqEntry.Build())
-	respPane := container.NewBorder(newBoldLabel("Response"), nil, nil, nil,
-		respEntry.Build())
-
-	split := container.NewHSplit(reqPane, respPane)
+	split := container.NewHSplit(
+		container.NewBorder(newBoldLabel("Request"), nil, nil, nil, reqEntry.Build()),
+		container.NewBorder(newBoldLabel("Response"), nil, nil, nil, respEntry.Build()),
+	)
 	split.SetOffset(0.5)
 
-	linkedDialog := dialog.NewCustom(
-		title,
-		"Close",
+	d := dialog.NewCustom(title, "Close",
 		container.NewBorder(nil, sendBtn, nil, nil, split),
-		l.win,
-	)
+		l.win)
 
 	sendBtn.OnTapped = func() {
 		hostOnly, portStr, err := net.SplitHostPort(host)
@@ -406,24 +382,25 @@ func (l *lootTab) showRequestResponseDialog(title, rawRequest, rawResponse, host
 			}
 		}
 		port, _ := strconv.Atoi(portStr)
-		path := pathOf(extractURLFromRaw(rawRequest))
+		path := PathOf(extractURLFromRaw(rawRequest))
 		if len(path) > 20 {
 			path = path[:20] + "..."
 		}
-		name := fmt.Sprintf("%s %s", extractMethodFromRaw(rawRequest), path)
-		l.repeater.AddTab(name, hostOnly, port, useTLS, rawRequest)
-		linkedDialog.Hide()
+		l.repeater.AddTab(
+			fmt.Sprintf("%s %s", extractMethodFromRaw(rawRequest), path),
+			hostOnly, port, useTLS, rawRequest,
+		)
+		d.Hide()
 	}
 
-	closeOnEscape(l.win, linkedDialog.Dismiss)
-	linkedDialog.Show()
-	linkedDialog.Resize(fyne.NewSize(900, 600))
+	closeOnEscape(l.win, d.Dismiss)
+	d.Show()
+	d.Resize(fyne.NewSize(900, 600))
 }
 
-// extractURLFromRaw extracts the URL path from the first line of a raw HTTP request.
+// extractURLFromRaw extracts the path from the first line of a raw HTTP request.
 func extractURLFromRaw(rawRequest string) string {
-	firstLine := strings.SplitN(rawRequest, "\n", 2)[0]
-	parts := strings.Fields(firstLine)
+	parts := strings.Fields(strings.SplitN(rawRequest, "\n", 2)[0])
 	if len(parts) >= 2 {
 		return parts[1]
 	}
@@ -432,8 +409,7 @@ func extractURLFromRaw(rawRequest string) string {
 
 // extractMethodFromRaw extracts the HTTP method from the first line of a raw HTTP request.
 func extractMethodFromRaw(rawRequest string) string {
-	firstLine := strings.SplitN(rawRequest, "\n", 2)[0]
-	parts := strings.Fields(firstLine)
+	parts := strings.Fields(strings.SplitN(rawRequest, "\n", 2)[0])
 	if len(parts) >= 1 {
 		return parts[0]
 	}

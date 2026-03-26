@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/shiv/internal/cert"
+	internalhttp "github.com/shiv/internal/http"
 	"github.com/shiv/internal/logger"
 	"github.com/shiv/internal/store"
 )
@@ -141,10 +142,9 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	elapsed := time.Since(start).Milliseconds()
 
-	stripResponseCacheHeaders(resp.Header)
-	for headerKey, headerValues := range resp.Header {
-		for _, headerValue := range headerValues {
-			w.Header().Add(headerKey, headerValue)
+	for k, vals := range resp.Header {
+		for _, v := range vals {
+			w.Header().Add(k, v)
 		}
 	}
 	w.WriteHeader(resp.StatusCode)
@@ -154,8 +154,8 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	logger.Info("%s %s %d %db %dms", r.Method, r.URL, resp.StatusCode, len(respBody), elapsed)
 
-	logBody := decompressBody(resp.Header, respBody)
-	if isBinary(resp.Header) {
+	logBody := internalhttp.Decompress(resp.Header, respBody)
+	if internalhttp.IsBinary(resp.Header) {
 		logBody = nil
 	}
 

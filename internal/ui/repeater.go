@@ -1,18 +1,8 @@
 package ui
 
 import (
-	"bufio"
-	"bytes"
-	"compress/flate"
-	"compress/gzip"
-	"crypto/tls"
 	"fmt"
-	"io"
-	"net"
-	"net/http"
-	"strconv"
 	"strings"
-	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
@@ -20,7 +10,7 @@ import (
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
-	"github.com/andybalholm/brotli"
+	internalhttp "github.com/shiv/internal/http"
 	"github.com/shiv/internal/logger"
 	"github.com/shiv/internal/store"
 	"github.com/shiv/internal/ui/widgets"
@@ -47,9 +37,9 @@ func newRepeaterTab(projectStore *store.Store, win fyne.Window) *repeaterTab {
 }
 
 func (r *repeaterTab) closeTab(closed *container.TabItem) {
-	if tabId, ok := r.tabIDs[closed]; ok {
-		logger.Info("repeater: OnClosed called, found=%v id=%d", ok, tabId)
-		if err := r.projectStore.DeleteRepeaterTab(tabId); err != nil {
+	if tabID, ok := r.tabIDs[closed]; ok {
+		logger.Info("repeater: OnClosed called, found=%v id=%d", ok, tabID)
+		if err := r.projectStore.DeleteRepeaterTab(tabID); err != nil {
 			logger.Error("repeater: delete tab: %v", err)
 		}
 		delete(r.tabIDs, closed)
@@ -136,10 +126,11 @@ func (r *repeaterTab) buildTabItem(tab store.RepeaterTab) *container.TabItem {
 
 	var lastRawRequest string
 	var lastRawResponse string
+	cookieJar := make(map[string]string)
 
 	inspectBtn := widget.NewButtonWithIcon("Inspector", AppIcon("inspector"), func() {
 		lastTx := store.Transaction{
-			RespHeaders: parseRawHeaders(lastRawResponse),
+			RespHeaders: internalhttp.ParseRawHeaders(lastRawResponse),
 			RespBody:    []byte(lastRawResponse),
 		}
 		showInspectorDialog(lastTx, r.win)
@@ -161,23 +152,33 @@ func (r *repeaterTab) buildTabItem(tab store.RepeaterTab) *container.TabItem {
 			return
 		}
 		rawReq := reqEditor.GetText()
-		host, port, useTLS := parseHostFromRaw(rawReq)
+		host, port, useTLS := internalhttp.ParseHostFromRaw(rawReq)
 		if host == "" {
 			respLabel.SetText("Error: no Host header found in request")
 			return
 		}
+
 		sendBtn.Disable()
 		go func() {
-			resp, err := sendRawRequest(host, port, useTLS, rawReq)
+			result, err := internalhttp.SendRaw(internalhttp.RawRequestOptions{
+				Host:      host,
+				Port:      port,
+				TLS:       useTLS,
+				RawReq:    rawReq,
+				CookieJar: cookieJar,
+			})
 			fyne.Do(func() {
 				sendBtn.Enable()
 				if err != nil {
 					respLabel.SetText("Error: " + err.Error())
 					logger.Error("repeater: send: %v", err)
 				} else {
-					respLabel.SetText(resp)
+					respLabel.SetText(result.Raw)
+					for _, c := range result.Cookies {
+						cookieJar[c.Name] = c.Value
+					}
 					lastRawRequest = rawReq
-					lastRawResponse = resp
+					lastRawResponse = result.Raw
 					inspectBtn.Enable()
 					sendToLootBtn.Enable()
 				}
@@ -202,7 +203,7 @@ func (r *repeaterTab) buildTabItem(tab store.RepeaterTab) *container.TabItem {
 			}
 			name = fmt.Sprintf("%s %s", parts[0], path)
 		}
-		host, port, useTLS := parseHostFromRaw(raw)
+		host, port, useTLS := internalhttp.ParseHostFromRaw(raw)
 		r.AddTab(name, host, port, useTLS, raw)
 	})
 
@@ -229,162 +230,4 @@ func (r *repeaterTab) buildTabItem(tab store.RepeaterTab) *container.TabItem {
 	r.loadFns[tabItem] = func() { reqEditor.SetText(tab.RawRequest) }
 
 	return tabItem
-}
-
-func sendRawRequest(host string, port int, useTLS bool, rawReq string) (string, error) {
-	addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
-
-	var conn net.Conn
-	var err error
-
-	if useTLS {
-		conn, err = tls.Dial("tcp", addr, &tls.Config{
-			ServerName:         host,
-			InsecureSkipVerify: true, //nolint:gosec
-		})
-	} else {
-		conn, err = net.DialTimeout("tcp", addr, 10*time.Second)
-	}
-	if err != nil {
-		return "", fmt.Errorf("dial %s: %w", addr, err)
-	}
-	defer conn.Close()
-	conn.SetDeadline(time.Now().Add(30 * time.Second))
-
-	rawReq = strings.ReplaceAll(rawReq, "\r\n", "\n")
-	rawReq = strings.ReplaceAll(rawReq, "\n", "\r\n")
-
-	parts := strings.SplitN(rawReq, "\r\n\r\n", 2)
-	headerSection := parts[0]
-	body := ""
-	if len(parts) == 2 {
-		body = parts[1]
-		body = strings.TrimRight(body, "\r\n")
-	}
-
-	headerLines := strings.Split(headerSection, "\r\n")
-	var newLines []string
-	for _, line := range headerLines {
-		lower := strings.ToLower(line)
-		if strings.HasPrefix(lower, "host:") {
-			hostVal := strings.TrimSpace(line[5:])
-			if h, _, err := net.SplitHostPort(hostVal); err == nil {
-				line = "Host: " + h
-			}
-		}
-		if strings.HasPrefix(lower, "accept-encoding:") {
-			continue
-		}
-		if strings.HasPrefix(lower, "content-length:") {
-			continue
-		}
-		newLines = append(newLines, line)
-	}
-
-	if len(body) > 0 {
-		newLines = append(newLines, fmt.Sprintf("Content-Length: %d", len(body)))
-	}
-
-	finalReq := strings.Join(newLines, "\r\n") + "\r\n\r\n" + body
-
-	logger.Debug("repeater: sending request:\n%s", finalReq)
-	if _, err := fmt.Fprint(conn, finalReq); err != nil {
-		return "", fmt.Errorf("write request: %w", err)
-	}
-
-	httpResp, err := http.ReadResponse(bufio.NewReader(conn), nil)
-	if err != nil {
-		return "", fmt.Errorf("read response: %w", err)
-	}
-	defer httpResp.Body.Close()
-
-	respBody, _ := io.ReadAll(io.LimitReader(httpResp.Body, 1<<20))
-	respBody = decompressRepeaterBody(httpResp.Header, respBody)
-	if len(respBody) > 64*1024 {
-		respBody = append(respBody[:64*1024], []byte("\n... truncated")...)
-	}
-
-	var builder strings.Builder
-	fmt.Fprintf(&builder, "HTTP/1.1 %d %s\r\n", httpResp.StatusCode, http.StatusText(httpResp.StatusCode))
-	for headerKey, headerValues := range httpResp.Header {
-		for _, headerValue := range headerValues {
-			fmt.Fprintf(&builder, "%s: %s\r\n", headerKey, headerValue)
-		}
-	}
-	builder.WriteString("\r\n")
-	builder.Write(respBody)
-	return builder.String(), nil
-}
-
-func decompressRepeaterBody(header http.Header, body []byte) []byte {
-	contentEncoding := strings.ToLower(header.Get("Content-Encoding"))
-	bodyReader := bytes.NewReader(body)
-	switch contentEncoding {
-	case "gzip":
-		gzipReader, err := gzip.NewReader(bodyReader)
-		if err != nil {
-			return body
-		}
-		defer gzipReader.Close()
-		out, err := io.ReadAll(gzipReader)
-		if err != nil {
-			return body
-		}
-		return out
-	case "deflate":
-		out, err := io.ReadAll(flate.NewReader(bodyReader))
-		if err != nil {
-			return body
-		}
-		return out
-	case "br":
-		out, err := io.ReadAll(brotli.NewReader(bodyReader))
-		if err != nil {
-			return body
-		}
-		return out
-	}
-	return body
-}
-
-func parseRawHeaders(raw string) http.Header {
-	headers := http.Header{}
-	lines := strings.Split(raw, "\r\n")
-	for _, line := range lines[1:] {
-		if line == "" {
-			break
-		}
-		parts := strings.SplitN(line, ": ", 2)
-		if len(parts) == 2 {
-			headers.Add(parts[0], parts[1])
-		}
-	}
-	return headers
-}
-
-func parseHostFromRaw(raw string) (host string, port int, useTLS bool) {
-	for line := range strings.SplitSeq(raw, "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(strings.ToLower(line), "host:") {
-			hostVal := strings.TrimSpace(line[5:])
-
-			if hostname, portStr, err := net.SplitHostPort(hostVal); err == nil {
-				host = hostname
-				port, _ = strconv.Atoi(portStr)
-				useTLS = port == 443
-			} else {
-				// No port → heuristic
-				host = hostVal
-				if net.ParseIP(hostVal) != nil {
-					port = 80
-					useTLS = false
-				} else {
-					port = 443
-					useTLS = true
-				}
-			}
-			return
-		}
-	}
-	return "", 0, false
 }

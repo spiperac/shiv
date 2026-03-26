@@ -96,6 +96,7 @@ func (s *Store) Log(t Transaction) error {
 				return fmt.Errorf("store: update transaction: %w", err)
 			}
 			t.ID = existingID
+			t.Timestamp = time.Now()
 			select {
 			case s.Updates <- t:
 			default:

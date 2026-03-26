@@ -1,11 +1,8 @@
 package ui
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
 	"net"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -122,14 +119,12 @@ func (h *historyTab) build() fyne.CanvasObject {
 		}
 		tx := h.filtered[row]
 		switch col {
-		case 0: // Method
+		case 0:
 			switch tx.Method {
 			case "POST", "PUT", "PATCH", "DELETE":
 				return widget.WarningImportance
-			default:
-				return widget.MediumImportance
 			}
-		case 3: // Status
+		case 3:
 			switch {
 			case tx.StatusCode >= 500:
 				return widget.DangerImportance
@@ -195,12 +190,7 @@ func (h *historyTab) build() fyne.CanvasObject {
 		showInspectorDialog(h.selectedTx, h.win)
 	})
 
-	reqPane := container.NewBorder(
-		newBoldLabel("Request"),
-		nil, nil, nil,
-		h.reqLabel.Build(),
-	)
-
+	reqPane := container.NewBorder(newBoldLabel("Request"), nil, nil, nil, h.reqLabel.Build())
 	respPane := container.NewBorder(
 		container.NewBorder(nil, nil, nil, inspectBtn, newBoldLabel("Response")),
 		nil, nil, nil,
@@ -251,10 +241,8 @@ func (h *historyTab) contextMenuItems(tx store.Transaction) []widgets.ContextMen
 			},
 		},
 		{
-			Label: "Send to Intruder",
-			Action: func() {
-				h.sendToIntruder(tx)
-			},
+			Label:  "Send to Intruder",
+			Action: func() { h.sendToIntruder(tx) },
 		},
 		{
 			Label: "Send to Loot",
@@ -264,10 +252,8 @@ func (h *historyTab) contextMenuItems(tx store.Transaction) []widgets.ContextMen
 			},
 		},
 		{
-			Label: "Copy URL",
-			Action: func() {
-				fyne.CurrentApp().Clipboard().SetContent(tx.URL)
-			},
+			Label:  "Copy URL",
+			Action: func() { fyne.CurrentApp().Clipboard().SetContent(tx.URL) },
 		},
 		{
 			Label: "Copy Request",
@@ -279,7 +265,7 @@ func (h *historyTab) contextMenuItems(tx store.Transaction) []widgets.ContextMen
 						return
 					}
 					fyne.Do(func() {
-						fyne.CurrentApp().Clipboard().SetContent(formatRequest(*fullTx))
+						fyne.CurrentApp().Clipboard().SetContent(FormatRequest(*fullTx))
 					})
 				}()
 			},
@@ -294,7 +280,7 @@ func (h *historyTab) contextMenuItems(tx store.Transaction) []widgets.ContextMen
 						return
 					}
 					fyne.Do(func() {
-						fyne.CurrentApp().Clipboard().SetContent(formatResponse(*fullTx))
+						fyne.CurrentApp().Clipboard().SetContent(FormatResponse(*fullTx))
 					})
 				}()
 			},
@@ -313,16 +299,15 @@ func (h *historyTab) sendToRepeater(tx store.Transaction) {
 		}
 	}
 	port, _ := strconv.Atoi(portStr)
-	path := pathOf(tx.URL)
+	path := PathOf(tx.URL)
 	if len(path) > 20 {
 		path = path[:20] + "..."
 	}
-	name := fmt.Sprintf("%s %s", tx.Method, path)
-	h.repeater.AddTab(name, host, port, tx.TLS, formatRequest(tx))
+	h.repeater.AddTab(fmt.Sprintf("%s %s", tx.Method, path), host, port, tx.TLS, FormatRequest(tx))
 }
 
 func (h *historyTab) sendToIntruder(tx store.Transaction) {
-	h.intruder.reqEditor.SetText(formatRequest(tx))
+	h.intruder.reqEditor.SetText(FormatRequest(tx))
 }
 
 func (h *historyTab) cellText(tx store.Transaction, col int) string {
@@ -332,7 +317,7 @@ func (h *historyTab) cellText(tx store.Transaction, col int) string {
 	case 1:
 		return tx.Host
 	case 2:
-		return pathOf(tx.URL)
+		return PathOf(tx.URL)
 	case 3:
 		return fmt.Sprintf("%d", tx.StatusCode)
 	case 4:
@@ -343,17 +328,11 @@ func (h *historyTab) cellText(tx store.Transaction, col int) string {
 	return ""
 }
 
-const maxDisplayBytes = 64 * 1024 // 64 KB
-
 func (h *historyTab) showDetail(tx store.Transaction) {
-	if len(tx.RespBody) > maxDisplayBytes {
-		tx.RespBody = append(tx.RespBody[:maxDisplayBytes], []byte("\n... truncated")...)
-	}
-	if len(tx.ReqBody) > maxDisplayBytes {
-		tx.ReqBody = append(tx.ReqBody[:maxDisplayBytes], []byte("\n... truncated")...)
-	}
-	h.reqLabel.SetText(formatRequest(tx))
-	h.respLabel.SetText(formatResponse(tx))
+	tx.RespBody = TruncateBody(tx.RespBody)
+	tx.ReqBody = TruncateBody(tx.ReqBody)
+	h.reqLabel.SetText(FormatRequest(tx))
+	h.respLabel.SetText(FormatResponse(tx))
 }
 
 func (h *historyTab) applyFilter() {
@@ -416,74 +395,4 @@ func (h *historyTab) watchUpdates() {
 			}
 		})
 	}
-}
-
-func pathOf(rawURL string) string {
-	for _, prefix := range []string{"https://", "http://"} {
-		if strings.HasPrefix(rawURL, prefix) {
-			rest := rawURL[len(prefix):]
-			if slash := strings.Index(rest, "/"); slash >= 0 {
-				return rest[slash:]
-			}
-			return "/"
-		}
-	}
-	return rawURL
-}
-
-func prettyJSON(body []byte) []byte {
-	if len(body) == 0 {
-		return body
-	}
-	var jsonBuf bytes.Buffer
-	if err := json.Indent(&jsonBuf, body, "", "  "); err != nil {
-		return body
-	}
-	return jsonBuf.Bytes()
-}
-
-func formatRequest(tx store.Transaction) string {
-	var builder strings.Builder
-	fmt.Fprintf(&builder, "%s %s HTTP/1.1\r\n", tx.Method, pathOf(tx.URL))
-	fmt.Fprintf(&builder, "Host: %s\r\n", tx.Host)
-	keys := make([]string, 0, len(tx.ReqHeaders))
-	for k := range tx.ReqHeaders {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	for _, headerKey := range keys {
-		for _, headerValue := range tx.ReqHeaders[headerKey] {
-			fmt.Fprintf(&builder, "%s: %s\r\n", headerKey, headerValue)
-		}
-	}
-	builder.WriteString("\r\n")
-	if len(tx.ReqBody) > 0 {
-		builder.Write(prettyJSON(tx.ReqBody))
-	}
-	return builder.String()
-}
-
-func formatResponse(tx store.Transaction) string {
-	var builder strings.Builder
-	fmt.Fprintf(&builder, "HTTP/1.1 %d\r\n", tx.StatusCode)
-	keys := make([]string, 0, len(tx.RespHeaders))
-	for k := range tx.RespHeaders {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	for _, headerKey := range keys {
-		for _, headerValue := range tx.RespHeaders[headerKey] {
-			fmt.Fprintf(&builder, "%s: %s\r\n", headerKey, headerValue)
-		}
-	}
-	builder.WriteString("\r\n")
-	if len(tx.RespBody) > 0 {
-		ct := tx.RespHeaders.Get("Content-Type")
-		if strings.Contains(ct, "application/json") {
-			builder.Write(prettyJSON(tx.RespBody))
-		} else {
-			builder.WriteString(string(tx.RespBody))
-		}
-	}
-	return builder.String()
 }

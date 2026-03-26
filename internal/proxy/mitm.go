@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"time"
 
+	internalhttp "github.com/shiv/internal/http"
 	"github.com/shiv/internal/logger"
 	"github.com/shiv/internal/store"
 )
@@ -126,8 +127,9 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		outReq.Header = interceptedReq.Header.Clone()
-		outReq.Host = bareHost
-		stripRequestCacheHeaders(outReq.Header)
+		// Use bare host (no port) so the upstream sees a clean Host header.
+		outReq.Host = internalhttp.NormalizeHost(bareHost, true)
+		internalhttp.StripRequestCacheHeaders(outReq.Header)
 
 		resp, err := upstreamClient.Do(outReq)
 		if err != nil {
@@ -145,15 +147,15 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		elapsed := time.Since(start).Milliseconds()
 		logger.Info("%s %s %d %db %dms", interceptedReq.Method, interceptedReq.URL, resp.StatusCode, len(respBody), elapsed)
 
-		stripResponseCacheHeaders(resp.Header)
+		internalhttp.StripResponseCacheHeaders(resp.Header)
 		resp.Body = io.NopCloser(bytes.NewReader(respBody))
 		if err := resp.Write(browserTLS); err != nil {
 			logger.Debug("mitm: write response to browser for %s: %v", bareHost, err)
 			return
 		}
 
-		logBody := decompressBody(resp.Header, respBody)
-		if isBinary(resp.Header) {
+		logBody := internalhttp.Decompress(resp.Header, respBody)
+		if internalhttp.IsBinary(resp.Header) {
 			logBody = nil
 		}
 

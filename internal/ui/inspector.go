@@ -17,39 +17,33 @@ import (
 func showInspectorDialog(tx store.Transaction, win fyne.Window) {
 	tabs := container.NewAppTabs()
 
-	// Headers tab
-	headers := buildHeadersList(tx.RespHeaders)
-	tabs.Append(container.NewTabItem("Headers", headers))
+	tabs.Append(container.NewTabItem("Headers", buildHeadersList(tx.RespHeaders)))
 
-	// Cookies tab
 	cookies := parseCookies(tx.RespHeaders)
-	cookieContent := buildKVTable(cookies)
-	tabs.Append(container.NewTabItem("Cookies", cookieContent))
+	tabs.Append(container.NewTabItem("Cookies", buildKVTable(cookies)))
 
-	// JSON tab if applicable
 	contentType := tx.RespHeaders.Get("Content-Type")
 	if strings.Contains(contentType, "application/json") && len(tx.RespBody) > 0 {
-		jsonEntry := widgets.NewTextView()
 		body := tx.RespBody
 		if idx := strings.Index(string(body), "\r\n\r\n"); idx >= 0 {
 			body = body[idx+4:]
 		} else if idx := strings.Index(string(body), "\n\n"); idx >= 0 {
 			body = body[idx+2:]
 		}
-		jsonEntry.SetText(string(prettyJSON(body)))
+		jsonEntry := widgets.NewTextView()
+		jsonEntry.SetText(string(PrettyJSON(body)))
 		tabs.Append(container.NewTabItem("JSON", jsonEntry.Build()))
 	}
 
-	inspectorDialog := dialog.NewCustom("Inspector", "Close", tabs, win)
-	inspectorDialog.Resize(fyne.NewSize(600, 400))
-	closeOnEscape(win, inspectorDialog.Dismiss)
-	inspectorDialog.Show()
+	d := dialog.NewCustom("Inspector", "Close", tabs, win)
+	d.Resize(fyne.NewSize(600, 400))
+	closeOnEscape(win, d.Dismiss)
+	d.Show()
 }
 
 func parseCookies(headers http.Header) [][2]string {
 	var result [][2]string
 	for _, line := range headers["Set-Cookie"] {
-		// only take the name=value part before first ;
 		parts := strings.SplitN(line, ";", 2)
 		cookieParts := strings.SplitN(strings.TrimSpace(parts[0]), "=", 2)
 		if len(cookieParts) == 2 {
@@ -57,7 +51,6 @@ func parseCookies(headers http.Header) [][2]string {
 		} else if len(cookieParts) == 1 {
 			result = append(result, [2]string{cookieParts[0], ""})
 		}
-		// also parse attributes
 		if len(parts) > 1 {
 			for attr := range strings.SplitSeq(parts[1], ";") {
 				attr = strings.TrimSpace(attr)
@@ -78,15 +71,15 @@ func parseCookies(headers http.Header) [][2]string {
 
 func buildHeadersList(headers http.Header) fyne.CanvasObject {
 	keys := make([]string, 0, len(headers))
-	for headerKey := range headers {
-		keys = append(keys, headerKey)
+	for k := range headers {
+		keys = append(keys, k)
 	}
 	sort.Strings(keys)
 
 	var pairs [][2]string
-	for _, headerKey := range keys {
-		for _, headerValue := range headers[headerKey] {
-			pairs = append(pairs, [2]string{headerKey, headerValue})
+	for _, k := range keys {
+		for _, v := range headers[k] {
+			pairs = append(pairs, [2]string{k, v})
 		}
 	}
 	return buildKVTable(pairs)
@@ -94,17 +87,16 @@ func buildHeadersList(headers http.Header) fyne.CanvasObject {
 
 func buildKVTable(pairs [][2]string) fyne.CanvasObject {
 	if len(pairs) == 0 {
-		emptyLabel := widget.NewLabel("None")
-		emptyLabel.Importance = widget.LowImportance
-		return container.NewCenter(emptyLabel)
+		l := widget.NewLabel("None")
+		l.Importance = widget.LowImportance
+		return container.NewCenter(l)
 	}
-
-	kvTable := widget.NewTable(
+	t := widget.NewTable(
 		func() (int, int) { return len(pairs), 2 },
 		func() fyne.CanvasObject {
-			label := widget.NewLabel("")
-			label.Truncation = fyne.TextTruncateEllipsis
-			return label
+			l := widget.NewLabel("")
+			l.Truncation = fyne.TextTruncateEllipsis
+			return l
 		},
 		func(id widget.TableCellID, obj fyne.CanvasObject) {
 			l := obj.(*widget.Label)
@@ -117,7 +109,7 @@ func buildKVTable(pairs [][2]string) fyne.CanvasObject {
 			}
 		},
 	)
-	kvTable.SetColumnWidth(0, 200)
-	kvTable.SetColumnWidth(1, 350)
-	return kvTable
+	t.SetColumnWidth(0, 200)
+	t.SetColumnWidth(1, 350)
+	return t
 }
