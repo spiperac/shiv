@@ -76,6 +76,10 @@ func AppIcon(name string) fyne.Resource {
 		return fyne.NewStaticResource("on-button.png", assets.IconOnButton)
 	case "settings":
 		return fyne.NewStaticResource("settings.png", assets.IconSettings)
+	case "web":
+		return fyne.NewStaticResource("web.png", assets.IconWeb)
+	case "web1":
+		return fyne.NewStaticResource("web1.png", assets.IconWeb1)
 	}
 	return theme.DefaultTheme().Icon(theme.IconNameQuestion)
 }

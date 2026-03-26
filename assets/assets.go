@@ -44,6 +44,12 @@ var IconOnButton []byte
 //go:embed icons/off-button.png
 var IconOffButton []byte
 
+//go:embed icons/web.png
+var IconWeb []byte
+
+//go:embed icons/web1.png
+var IconWeb1 []byte
+
 //go:embed findings.md.tmpl
 var FindingsTemplate string
 

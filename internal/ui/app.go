@@ -50,6 +50,10 @@ func ShowMainWindow(fyneApp fyne.App, projectStore *store.Store, proxyServer *pr
 
 	settingsBtn := widget.NewButtonWithIcon("", AppIcon("settings"), nil)
 
+	browserBtn := widget.NewButtonWithIcon("", AppIcon("web"), func() {
+		launchDefaultBrowser(fyneApp, mainWin)
+	})
+
 	proxyToggleBtn := widget.NewButtonWithIcon("", AppIcon("off-button"), nil)
 
 	proxyRunningBinding.AddListener(binding.NewDataListener(func() {
@@ -109,7 +113,7 @@ func ShowMainWindow(fyneApp fyne.App, projectStore *store.Store, proxyServer *pr
 
 	functionBar := container.NewBorder(nil, nil,
 		container.NewHBox(logo, appName),
-		container.NewHBox(proxyLabel, proxyToggleBtn, settingsBtn, toggleThemeBtn),
+		container.NewHBox(proxyLabel, proxyToggleBtn, settingsBtn, browserBtn, toggleThemeBtn),
 		layout.NewSpacer(),
 	)
 

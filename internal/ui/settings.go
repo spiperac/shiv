@@ -26,6 +26,7 @@ func showSettingsDialog(fyneApp fyne.App, parentWin fyne.Window, proxyServer *pr
 	tabs := container.NewAppTabs(
 		container.NewTabItem("Certificate", buildCertificateTab(parentWin)),
 		container.NewTabItem("Proxy", buildProxyTab(fyneApp, proxyServer)),
+		container.NewTabItem("Browser", buildBrowserTab(fyneApp, parentWin)),
 		container.NewTabItem("Appearance & Shortcuts", buildAppearanceTab(fyneApp, keybinds)),
 	)
 	tabs.SetTabLocation(container.TabLocationTop)
@@ -230,5 +231,111 @@ func buildAppearanceTab(fyneApp fyne.App, keybinds *Keybinds) fyne.CanvasObject 
 		),
 		saveShortcutsBtn,
 		shortcutStatus,
+	)
+}
+
+func buildBrowserTab(fyneApp fyne.App, win fyne.Window) fyne.CanvasObject {
+	prefs := fyneApp.Preferences()
+	statusLabel := widget.NewLabel("")
+	statusLabel.Wrapping = fyne.TextWrapBreak
+
+	browsers := DetectBrowsers()
+
+	names := make([]string, len(browsers))
+	for i, b := range browsers {
+		names[i] = b.Name
+	}
+
+	var browserSelect *widget.Select
+	if len(browsers) == 0 {
+		browserSelect = widget.NewSelect([]string{"No browsers detected"}, nil)
+		browserSelect.SetSelected("No browsers detected")
+		browserSelect.Disable()
+	} else {
+		browserSelect = widget.NewSelect(names, nil)
+		// Pre-select saved default if it matches a detected browser.
+		savedPath := prefs.String(prefKeyDefaultBrowser)
+		for _, b := range browsers {
+			if b.Path == savedPath {
+				browserSelect.SetSelected(b.Name)
+				break
+			}
+		}
+		if browserSelect.Selected == "" {
+			browserSelect.SetSelected(names[0])
+		}
+	}
+
+	rescanBtn := widget.NewButton("Rescan", func() {
+		fresh := DetectBrowsers()
+		freshNames := make([]string, len(fresh))
+		for i, b := range fresh {
+			freshNames[i] = b.Name
+		}
+		browsers = fresh
+		names = freshNames
+		if len(freshNames) == 0 {
+			browserSelect.Options = []string{"No browsers detected"}
+			browserSelect.SetSelected("No browsers detected")
+			browserSelect.Disable()
+			statusLabel.SetText("No supported browsers found.")
+		} else {
+			browserSelect.Enable()
+			browserSelect.Options = freshNames
+			browserSelect.SetSelected(freshNames[0])
+			statusLabel.SetText(fmt.Sprintf("Found %d browser(s).", len(freshNames)))
+		}
+		browserSelect.Refresh()
+	})
+
+	saveBtn := widget.NewButton("Save Default", func() {
+		if len(browsers) == 0 {
+			return
+		}
+		sel := browserSelect.Selected
+		for _, b := range browsers {
+			if b.Name == sel {
+				prefs.SetString(prefKeyDefaultBrowser, b.Path)
+				statusLabel.SetText("Default browser saved: " + b.Name)
+				return
+			}
+		}
+	})
+	saveBtn.Importance = widget.HighImportance
+
+	clearProfileBtn := widget.NewButton("Clear Browser Profile", func() {
+		sel := browserSelect.Selected
+		for _, b := range browsers {
+			if b.Name == sel {
+				if err := ClearBrowserProfile(fyneApp, b.Path); err != nil {
+					statusLabel.SetText("Error: " + err.Error())
+				} else {
+					statusLabel.SetText("Profile cleared for: " + b.Name)
+				}
+				return
+			}
+		}
+	})
+
+	return container.NewVBox(
+		newBoldLabel("Browser"),
+		widget.NewLabel("Launch a browser pre-configured to route traffic through Shiv's proxy with an isolated profile."),
+		widget.NewForm(
+			widget.NewFormItem("Default browser", container.NewBorder(nil, nil, nil, rescanBtn, browserSelect)),
+		),
+		container.NewHBox(saveBtn, clearProfileBtn),
+		statusLabel,
+	)
+}
+
+// newBrowserPickerContent returns a simple select widget for the one-time picker dialog.
+func newBrowserPickerContent(names []string, onChanged func(string)) fyne.CanvasObject {
+	sel := widget.NewSelect(names, onChanged)
+	if len(names) > 0 {
+		sel.SetSelected(names[0])
+	}
+	return container.NewVBox(
+		widget.NewLabel("Multiple browsers detected. Choose one to set as default:"),
+		sel,
 	)
 }
