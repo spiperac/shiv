@@ -405,8 +405,15 @@ func (h *historyTab) watchUpdates() {
 			if len(h.rows) > 10000 {
 				h.rows = h.rows[:10000]
 			}
+			isSelected := h.hasSelected && h.selectedTx.ID == transaction.ID
+			if isSelected {
+				h.selectedTx = transaction
+			}
 			h.mu.Unlock()
 			h.applyFilter()
+			if isSelected {
+				h.showDetail(transaction)
+			}
 		})
 	}
 }

@@ -17,6 +17,7 @@ import (
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
+	"github.com/shiv/internal/logger"
 	"github.com/shiv/internal/store"
 	"github.com/shiv/internal/ui/widgets"
 )
@@ -323,7 +324,19 @@ func (t *intruderTab) build() fyne.CanvasObject {
 			t.requestPane.SetText(result.rawReq)
 		}
 	}
-	t.table.MenuItems = nil
+
+	//////////////////////////////////////////////////////////////////////////
+	// t.table.MenuItems = func(row int) []widgets.ContextMenuItem {        //
+	// 	t.mu.RLock()						        //
+	// 	if row >= len(t.filtered) {				        //
+	// 		t.mu.RUnlock()					        //
+	// 		return nil					        //
+	// 	}							        //
+	// 	tx := t.filtered[row]					        //
+	// 	t.mu.RUnlock()						        //
+	// 	return t.contextMenuItems(tx)				        //
+	// }								        //
+	//////////////////////////////////////////////////////////////////////////
 
 	tableObj := t.table.Build()
 
@@ -628,4 +641,78 @@ func (t *intruderTab) applyFilter() {
 	t.mu.Unlock()
 
 	t.table.Refresh()
+}
+
+func (t *intruderTab) sendToRepeater(tx store.Transaction) {
+	host, portStr, err := net.SplitHostPort(tx.Host)
+	if err != nil {
+		host = tx.Host
+		if tx.TLS {
+			portStr = "443"
+		} else {
+			portStr = "80"
+		}
+	}
+	port, _ := strconv.Atoi(portStr)
+	path := pathOf(tx.URL)
+	if len(path) > 20 {
+		path = path[:20] + "..."
+	}
+	name := fmt.Sprintf("%s %s", tx.Method, path)
+	t.repeater.AddTab(name, host, port, tx.TLS, formatRequest(tx))
+}
+
+func (t *intruderTab) contextMenuItems(tx store.Transaction) []widgets.ContextMenuItem {
+	return []widgets.ContextMenuItem{
+		{
+			Label: "Send to Repeater",
+			Action: func() {
+				go func() {
+					fullTx, err := t.projectStore.GetTransaction(tx.ID)
+					if err != nil {
+						logger.Error("send to repeater: %v", err)
+						return
+					}
+					fyne.Do(func() { t.sendToRepeater(*fullTx) })
+				}()
+			},
+		},
+		{
+			Label: "Send to Loot",
+			Action: func() {
+				id := tx.ID
+				t.loot.showAddDialog(&id, "", "")
+			},
+		},
+		{
+			Label: "Copy Request",
+			Action: func() {
+				go func() {
+					fullTx, err := t.projectStore.GetTransaction(tx.ID)
+					if err != nil {
+						logger.Error("history: copy request: %v", err)
+						return
+					}
+					fyne.Do(func() {
+						fyne.CurrentApp().Clipboard().SetContent(formatRequest(*fullTx))
+					})
+				}()
+			},
+		},
+		{
+			Label: "Copy Response",
+			Action: func() {
+				go func() {
+					fullTx, err := t.projectStore.GetTransaction(tx.ID)
+					if err != nil {
+						logger.Error("history: copy response: %v", err)
+						return
+					}
+					fyne.Do(func() {
+						fyne.CurrentApp().Clipboard().SetContent(formatResponse(*fullTx))
+					})
+				}()
+			},
+		},
+	}
 }

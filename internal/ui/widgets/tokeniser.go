@@ -149,14 +149,14 @@ func tokeniseHTTPMeta(line string, isFirstLine bool) []tvToken {
 	if isFirstLine {
 		return tokeniseFirstLine(line)
 	}
-	colonIdx := strings.Index(line, ":")
-	if colonIdx < 0 {
+	before, after, ok := strings.Cut(line, ":")
+	if !ok {
 		return []tvToken{{Text: line, Kind: tvKindPlain}}
 	}
 	return []tvToken{
-		{Text: line[:colonIdx], Kind: tvKindHdrName},
+		{Text: before, Kind: tvKindHdrName},
 		{Text: ":", Kind: tvKindHdrColon},
-		{Text: line[colonIdx+1:], Kind: tvKindHdrValue},
+		{Text: after, Kind: tvKindHdrValue},
 	}
 }
 
