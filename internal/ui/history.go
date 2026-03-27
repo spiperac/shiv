@@ -3,18 +3,187 @@ package ui
 import (
 	"fmt"
 	"net"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/widget"
 
 	"github.com/shiv/internal/logger"
 	"github.com/shiv/internal/store"
 	"github.com/shiv/internal/ui/widgets"
 )
+
+// ── Site map ──────────────────────────────────────────────────────────────────
+
+type siteMapNode struct {
+	children map[string]*siteMapNode
+}
+
+func newSiteMapNode() *siteMapNode {
+	return &siteMapNode{children: make(map[string]*siteMapNode)}
+}
+
+type siteMap struct {
+	mu          sync.RWMutex
+	hosts       map[string]*siteMapNode
+	scopeFilter func(host string) bool // nil = show all
+}
+
+func newSiteMap() *siteMap {
+	return &siteMap{hosts: make(map[string]*siteMapNode)}
+}
+
+func (sm *siteMap) add(tx store.Transaction) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	if _, ok := sm.hosts[tx.Host]; !ok {
+		sm.hosts[tx.Host] = newSiteMapNode()
+	}
+	node := sm.hosts[tx.Host]
+	// Requests to "/" have no segments — they are represented by the host
+	// node itself. No child node is created for root, avoiding the duplicate
+	// "/" nesting bug.
+	for _, seg := range splitPath(PathOf(tx.URL)) {
+		if _, ok := node.children[seg]; !ok {
+			node.children[seg] = newSiteMapNode()
+		}
+		node = node.children[seg]
+	}
+}
+
+func (sm *siteMap) clear() {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	sm.hosts = make(map[string]*siteMapNode)
+}
+
+// Node ID scheme:
+//
+//	""                            → invisible root
+//	"h:example.com:443"           → host branch
+//	"p:example.com:443|/shop"     → path node /shop
+//	"p:example.com:443|/shop/brands" → path node /shop/brands
+//
+// The separator between host and path is "|" to avoid clashing with ":" in
+// host:port strings.
+func (sm *siteMap) childUIDs(uid widget.TreeNodeID) []widget.TreeNodeID {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+
+	if uid == "" {
+		ids := make([]widget.TreeNodeID, 0, len(sm.hosts))
+		for h := range sm.hosts {
+			if sm.scopeFilter != nil && !sm.scopeFilter(h) {
+				continue
+			}
+			ids = append(ids, "h:"+h)
+		}
+		sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+		return ids
+	}
+
+	host, path, ok := parseNodeID(uid)
+	if !ok {
+		return nil
+	}
+	node, ok := sm.hosts[host]
+	if !ok {
+		return nil
+	}
+	for _, seg := range splitPath(path) {
+		child, ok := node.children[seg]
+		if !ok {
+			return nil
+		}
+		node = child
+	}
+
+	ids := make([]widget.TreeNodeID, 0, len(node.children))
+	for seg := range node.children {
+		var childPath string
+		if path == "" {
+			childPath = "/" + seg
+		} else {
+			childPath = path + "/" + seg
+		}
+		ids = append(ids, "p:"+host+"|"+childPath)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	return ids
+}
+
+func (sm *siteMap) isBranch(uid widget.TreeNodeID) bool {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+
+	if uid == "" {
+		return true
+	}
+	host, path, ok := parseNodeID(uid)
+	if !ok {
+		return false
+	}
+	node, ok := sm.hosts[host]
+	if !ok {
+		return false
+	}
+	for _, seg := range splitPath(path) {
+		child, ok := node.children[seg]
+		if !ok {
+			return false
+		}
+		node = child
+	}
+	return len(node.children) > 0
+}
+
+func labelFor(uid widget.TreeNodeID) string {
+	host, path, ok := parseNodeID(uid)
+	if !ok {
+		return uid
+	}
+	if path == "" {
+		return host
+	}
+	segs := splitPath(path)
+	if len(segs) == 0 {
+		return "/"
+	}
+	return "/" + segs[len(segs)-1]
+}
+
+func parseNodeID(uid widget.TreeNodeID) (host, path string, ok bool) {
+	switch {
+	case strings.HasPrefix(uid, "h:"):
+		return uid[2:], "", true
+	case strings.HasPrefix(uid, "p:"):
+		rest := uid[2:]
+		i := strings.Index(rest, "|")
+		if i < 0 {
+			return "", "", false
+		}
+		return rest[:i], rest[i+1:], true
+	}
+	return "", "", false
+}
+
+func splitPath(path string) []string {
+	var segs []string
+	for _, s := range strings.Split(path, "/") {
+		if s != "" {
+			segs = append(segs, s)
+		}
+	}
+	return segs
+}
+
+// ── History tab ───────────────────────────────────────────────────────────────
 
 type historyTab struct {
 	projectStore *store.Store
@@ -26,6 +195,10 @@ type historyTab struct {
 	mu       sync.RWMutex
 	rows     []store.Transaction
 	filtered []store.Transaction
+
+	siteMap     *siteMap
+	tree        *widget.Tree
+	selectedUID widget.TreeNodeID
 
 	table        *widgets.DataTable
 	filterEntry  *widget.Entry
@@ -45,6 +218,7 @@ var tableColumns = []widgets.DataTableColumn{
 	{Header: "Status", Width: 70},
 	{Header: "Size", Width: 90},
 	{Header: "Duration", Width: 90},
+	{Header: "Time", Width: 220},
 }
 
 func newHistoryTab(projectStore *store.Store, win fyne.Window, repeater *repeaterTab, loot *lootTab, intruder *intruderTab) *historyTab {
@@ -54,6 +228,7 @@ func newHistoryTab(projectStore *store.Store, win fyne.Window, repeater *repeate
 		repeater:     repeater,
 		loot:         loot,
 		intruder:     intruder,
+		siteMap:      newSiteMap(),
 	}
 }
 
@@ -62,7 +237,18 @@ func (h *historyTab) build() fyne.CanvasObject {
 	h.filterEntry.SetPlaceHolder("Filter — host, path, method, status...")
 	h.filterEntry.OnChanged = func(_ string) { h.applyFilter() }
 
-	h.showOutScope = widget.NewCheck("Show out-of-scope", func(_ bool) { h.applyFilter() })
+	h.showOutScope = widget.NewCheck("Show out-of-scope", func(checked bool) {
+		if checked {
+			h.siteMap.scopeFilter = nil
+		} else {
+			h.siteMap.scopeFilter = func(host string) bool {
+				return h.projectStore.InScope(host)
+			}
+		}
+		h.tree.ScrollToTop()
+		h.tree.Refresh()
+		h.applyFilter()
+	})
 	h.showOutScope.Checked = true
 
 	h.scopeBtn = widget.NewButtonWithIcon("Scope", AppIcon("scope"), func() {
@@ -78,6 +264,9 @@ func (h *historyTab) build() fyne.CanvasObject {
 		h.rows = nil
 		h.filtered = nil
 		h.mu.Unlock()
+		h.siteMap.clear()
+		h.selectedUID = ""
+		h.tree.Refresh()
 		h.table.Refresh()
 		h.selectedTx = store.Transaction{}
 		h.hasSelected = false
@@ -89,6 +278,40 @@ func (h *historyTab) build() fyne.CanvasObject {
 		container.NewHBox(h.showOutScope, h.scopeBtn, clearBtn),
 		h.filterEntry,
 	)
+
+	h.tree = widget.NewTree(
+		h.siteMap.childUIDs,
+		h.siteMap.isBranch,
+		func(_ bool) fyne.CanvasObject {
+			return container.NewHBox(widget.NewIcon(nil), widget.NewLabel("template"))
+		},
+		func(uid widget.TreeNodeID, branch bool, obj fyne.CanvasObject) {
+			box := obj.(*fyne.Container)
+			icon := box.Objects[0].(*widget.Icon)
+			label := box.Objects[1].(*widget.Label)
+			if strings.HasPrefix(uid, "h:") {
+				icon.SetResource(AppIcon("web"))
+			} else if branch {
+				icon.SetResource(AppIcon("folder"))
+			} else {
+				if hasSuffix(labelFor(uid), ".jpg", ".jpeg", ".png", ".svg", ".gif") {
+					icon.SetResource(AppIcon("media"))
+				} else {
+
+					icon.SetResource(AppIcon("document"))
+				}
+			}
+			label.SetText(labelFor(uid))
+		},
+	)
+	h.tree.OnSelected = func(uid widget.TreeNodeID) {
+		h.selectedUID = uid
+		h.applyFilter()
+	}
+	// OnUnselected is intentionally not set. Fyne fires OnUnselected before
+	// OnSelected when the user clicks a different node. Setting it would blank
+	// selectedUID between the two events, causing the table to flash empty.
+	// The previous selectedUID is overwritten by OnSelected on the next node.
 
 	h.reqLabel = widgets.NewTextView()
 	h.reqLabel.SetWindow(h.win)
@@ -200,11 +423,31 @@ func (h *historyTab) build() fyne.CanvasObject {
 	detailSplit := container.NewHSplit(reqPane, respPane)
 	detailSplit.SetOffset(0.5)
 
-	mainSplit := container.NewVSplit(
+	topSplit := container.NewHSplit(
+		container.NewBorder(
+			container.NewHBox(newBoldLabel("Site Map"), layout.NewSpacer(), widget.NewButtonWithIcon("", AppIcon("scope"), func() {
+				if h.selectedUID == "" {
+					return
+				}
+				host, _, ok := parseNodeID(h.selectedUID)
+				if !ok {
+					return
+				}
+				bareHost, _, err := net.SplitHostPort(host)
+				if err != nil {
+					bareHost = host
+				}
+				h.projectStore.AddScopeEntry(bareHost)
+			})),
+			nil, nil, nil,
+			h.tree,
+		),
 		container.NewBorder(filterBar, nil, nil, nil, tableObj),
-		detailSplit,
 	)
-	mainSplit.SetOffset(0.5)
+	topSplit.SetOffset(0.25)
+
+	mainSplit := container.NewVSplit(topSplit, detailSplit)
+	mainSplit.SetOffset(0.55)
 
 	go func() {
 		txs, err := h.projectStore.AllTransactions()
@@ -216,6 +459,10 @@ func (h *historyTab) build() fyne.CanvasObject {
 			h.mu.Lock()
 			h.rows = txs
 			h.mu.Unlock()
+			for _, tx := range txs {
+				h.siteMap.add(tx)
+			}
+			h.tree.Refresh()
 			h.applyFilter()
 		})
 	}()
@@ -224,6 +471,98 @@ func (h *historyTab) build() fyne.CanvasObject {
 
 	return mainSplit
 }
+
+// ── Filter ────────────────────────────────────────────────────────────────────
+
+func (h *historyTab) applyFilter() {
+	query := strings.ToLower(h.filterEntry.Text)
+	showOut := h.showOutScope.Checked
+	terms := strings.Fields(query)
+	uid := h.selectedUID
+
+	var filtered []store.Transaction
+	h.mu.RLock()
+	for _, tx := range h.rows {
+		if !showOut && !tx.InScope {
+			continue
+		}
+		if uid != "" {
+			host, path, ok := parseNodeID(uid)
+			if ok {
+				if tx.Host != host {
+					continue
+				}
+				if path != "" {
+					txPath := PathOf(tx.URL)
+					// Exact match or child path.
+					// /login must not match /login-redirect.
+					if txPath != path && !strings.HasPrefix(txPath, path+"/") {
+						continue
+					}
+				}
+			}
+		}
+		if len(terms) > 0 {
+			searchable := strings.ToLower(tx.Host + tx.URL + tx.Method + strconv.Itoa(tx.StatusCode))
+			match := true
+			for _, term := range terms {
+				if !strings.Contains(searchable, term) {
+					match = false
+					break
+				}
+			}
+			if !match {
+				continue
+			}
+		}
+		filtered = append(filtered, tx)
+	}
+	h.mu.RUnlock()
+
+	h.mu.Lock()
+	h.filtered = filtered
+	h.mu.Unlock()
+	h.table.Refresh()
+}
+
+// ── Live updates ──────────────────────────────────────────────────────────────
+
+func (h *historyTab) watchUpdates() {
+	defer recoverPanic("watchUpdates")
+	for tx := range h.projectStore.Updates {
+		transaction := tx
+		fyne.Do(func() {
+			h.mu.Lock()
+			h.rows = append([]store.Transaction{transaction}, h.rows...)
+			if len(h.rows) > 10000 {
+				h.rows = h.rows[:10000]
+			}
+			isSelected := h.hasSelected && h.selectedTx.ID == transaction.ID
+			if isSelected {
+				h.selectedTx = transaction
+			}
+			h.mu.Unlock()
+
+			h.siteMap.add(transaction)
+			h.tree.Refresh()
+			h.applyFilter()
+			if isSelected {
+				h.showDetail(transaction)
+			}
+		})
+	}
+}
+
+// ── Detail ────────────────────────────────────────────────────────────────────
+
+func (h *historyTab) showDetail(tx store.Transaction) {
+	tx.RespBody = TruncateBody(tx.RespBody)
+	tx.ReqBody = TruncateBody(tx.ReqBody)
+	h.reqLabel.SetText(FormatRequest(tx))
+	h.respLabel.SetText(FormatResponse(tx))
+}
+
+// ── Context menu ──────────────────────────────────────────────────────────────
 
 func (h *historyTab) contextMenuItems(tx store.Transaction) []widgets.ContextMenuItem {
 	return []widgets.ContextMenuItem{
@@ -288,6 +627,8 @@ func (h *historyTab) contextMenuItems(tx store.Transaction) []widgets.ContextMen
 	}
 }
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
 func (h *historyTab) sendToRepeater(tx store.Transaction) {
 	host, portStr, err := net.SplitHostPort(tx.Host)
 	if err != nil {
@@ -324,76 +665,8 @@ func (h *historyTab) cellText(tx store.Transaction, col int) string {
 		return fmt.Sprintf("%db", len(tx.RespBody))
 	case 5:
 		return fmt.Sprintf("%dms", tx.DurationMs)
+	case 6:
+		return tx.Timestamp.Local().Format("2006-01-02 15:04:05")
 	}
 	return ""
-}
-
-func (h *historyTab) showDetail(tx store.Transaction) {
-	tx.RespBody = TruncateBody(tx.RespBody)
-	tx.ReqBody = TruncateBody(tx.ReqBody)
-	h.reqLabel.SetText(FormatRequest(tx))
-	h.respLabel.SetText(FormatResponse(tx))
-}
-
-func (h *historyTab) applyFilter() {
-	query := strings.ToLower(h.filterEntry.Text)
-	showOut := h.showOutScope.Checked
-	terms := strings.Fields(query)
-
-	var filtered []store.Transaction
-	h.mu.RLock()
-	for _, tx := range h.rows {
-		if !showOut && !tx.InScope {
-			continue
-		}
-		if len(terms) > 0 {
-			searchable := strings.ToLower(tx.Host + tx.URL + tx.Method + strconv.Itoa(tx.StatusCode))
-			match := true
-			for _, term := range terms {
-				if !strings.Contains(searchable, term) {
-					match = false
-					break
-				}
-			}
-			if !match {
-				continue
-			}
-		}
-		filtered = append(filtered, tx)
-	}
-	h.mu.RUnlock()
-
-	h.mu.Lock()
-	h.filtered = filtered
-	h.mu.Unlock()
-	h.table.Refresh()
-}
-
-func (h *historyTab) watchUpdates() {
-	defer recoverPanic("watchUpdates")
-	for tx := range h.projectStore.Updates {
-		transaction := tx
-		fyne.Do(func() {
-			h.mu.Lock()
-			newRows := make([]store.Transaction, 0, len(h.rows))
-			for _, row := range h.rows {
-				if row.ID != transaction.ID {
-					newRows = append(newRows, row)
-				}
-			}
-			h.rows = append([]store.Transaction{transaction}, newRows...)
-			if len(h.rows) > 10000 {
-				h.rows = h.rows[:10000]
-			}
-			isSelected := h.hasSelected && h.selectedTx.ID == transaction.ID
-			if isSelected {
-				h.selectedTx = transaction
-			}
-			h.mu.Unlock()
-			h.applyFilter()
-			if isSelected {
-				h.showDetail(transaction)
-			}
-		})
-	}
 }

@@ -50,6 +50,15 @@ var IconWeb []byte
 //go:embed icons/web1.png
 var IconWeb1 []byte
 
+//go:embed icons/document.png
+var IconDocument []byte
+
+//go:embed icons/folder.png
+var IconFolder []byte
+
+//go:embed icons/media.png
+var IconMedia []byte
+
 //go:embed findings.md.tmpl
 var FindingsTemplate string
 

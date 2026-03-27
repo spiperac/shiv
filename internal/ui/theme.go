@@ -80,6 +80,12 @@ func AppIcon(name string) fyne.Resource {
 		return fyne.NewStaticResource("web.png", assets.IconWeb)
 	case "web1":
 		return fyne.NewStaticResource("web1.png", assets.IconWeb1)
+	case "document":
+		return fyne.NewStaticResource("document.png", assets.IconDocument)
+	case "folder":
+		return fyne.NewStaticResource("folder.png", assets.IconFolder)
+	case "media":
+		return fyne.NewStaticResource("media.png", assets.IconMedia)
 	}
 	return theme.DefaultTheme().Icon(theme.IconNameQuestion)
 }

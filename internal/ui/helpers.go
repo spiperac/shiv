@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"strings"
+
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/widget"
 	"github.com/shiv/internal/logger"
@@ -29,4 +31,13 @@ func recoverPanic(context string) {
 	if r := recover(); r != nil {
 		logger.Error("panic in %s: %v", context, r)
 	}
+}
+
+func hasSuffix(s string, suffixes ...string) bool {
+	for _, suffix := range suffixes {
+		if strings.HasSuffix(s, suffix) {
+			return true
+		}
+	}
+	return false
 }
