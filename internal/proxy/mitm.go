@@ -143,22 +143,21 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxBodySize))
-		resp.Body.Close()
-		if err != nil {
-			logger.Error("mitm: read response body for %s: %v", bareHost, err)
-			return
-		}
-
-		elapsed := time.Since(start).Milliseconds()
-		logger.Info("%s %s %d %db %dms", interceptedReq.Method, interceptedReq.URL, resp.StatusCode, len(respBody), elapsed)
+		var respBuf bytes.Buffer
+		reader := io.TeeReader(io.LimitReader(resp.Body, maxBodySize), &respBuf)
 
 		internalhttp.StripResponseCacheHeaders(resp.Header)
-		resp.Body = io.NopCloser(bytes.NewReader(respBody))
+		resp.Body = io.NopCloser(reader)
+
 		if err := resp.Write(browserTLS); err != nil {
 			logger.Debug("mitm: write response to browser for %s: %v", bareHost, err)
 			return
 		}
+
+		respBody := respBuf.Bytes()
+
+		elapsed := time.Since(start).Milliseconds()
+		logger.Info("%s %s %d %db %dms", interceptedReq.Method, interceptedReq.URL, resp.StatusCode, len(respBody), elapsed)
 
 		logBody := internalhttp.Decompress(resp.Header, respBody)
 		if internalhttp.IsBinary(resp.Header) {

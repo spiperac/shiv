@@ -11,7 +11,6 @@ import (
 
 	"github.com/shiv/internal/cert"
 	internalhttp "github.com/shiv/internal/http"
-	"github.com/shiv/internal/logger"
 	"github.com/shiv/internal/store"
 )
 
@@ -24,7 +23,7 @@ type Proxy struct {
 	srv *http.Server
 }
 
-const maxBodySize = 10 << 20 // 10 MB
+const maxBodySize = 10 << 20
 
 func New(addr string, projectStore *store.Store) (*Proxy, error) {
 	ca, err := cert.Load()
@@ -39,7 +38,6 @@ func (p *Proxy) CA() *cert.CA {
 }
 
 func (p *Proxy) Start() error {
-	logger.Debug("proxy: Start() called, addr=%s", p.addr)
 	p.mu.Lock()
 	srv := &http.Server{
 		Addr:         p.addr,
@@ -51,12 +49,10 @@ func (p *Proxy) Start() error {
 	p.srv = srv
 	p.mu.Unlock()
 
-	logger.Always("proxy listening on %s", p.addr)
 	return srv.ListenAndServe()
 }
 
 func (p *Proxy) Restart(newAddr string) error {
-	logger.Debug("proxy: Restart() called, newAddr=%s", newAddr)
 	p.mu.Lock()
 	srv := p.srv
 	p.mu.Unlock()
@@ -64,9 +60,8 @@ func (p *Proxy) Restart(newAddr string) error {
 	if srv != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if err := srv.Shutdown(ctx); err != nil {
-			logger.Error("proxy: shutdown: %v", err)
-		}
+		_ = srv.Shutdown(ctx)
+
 		p.mu.Lock()
 		p.srv = nil
 		p.mu.Unlock()
@@ -77,15 +72,12 @@ func (p *Proxy) Restart(newAddr string) error {
 	p.mu.Unlock()
 
 	go func() {
-		if err := p.Start(); err != nil && err != http.ErrServerClosed {
-			logger.Error("proxy: restart: %v", err)
-		}
+		_ = p.Start()
 	}()
 	return nil
 }
 
 func (p *Proxy) Stop() {
-	logger.Debug("proxy: Stop() called")
 	p.mu.Lock()
 	srv := p.srv
 	p.mu.Unlock()
@@ -93,9 +85,8 @@ func (p *Proxy) Stop() {
 	if srv != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if err := srv.Shutdown(ctx); err != nil {
-			logger.Error("proxy: shutdown: %v", err)
-		}
+		_ = srv.Shutdown(ctx)
+
 		p.mu.Lock()
 		p.srv = nil
 		p.mu.Unlock()
@@ -103,7 +94,6 @@ func (p *Proxy) Stop() {
 }
 
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	defer recoverPanic("ServeHTTP " + r.URL.String())
 	if r.Method == http.MethodConnect {
 		p.handleConnect(w, r)
 		return
@@ -112,7 +102,6 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	reqBody, err := io.ReadAll(io.LimitReader(r.Body, maxBodySize))
 	if err != nil {
 		http.Error(w, "failed to read request body", http.StatusBadRequest)
-		logger.Error("read request body: %v", err)
 		return
 	}
 	r.Body = io.NopCloser(bytes.NewReader(reqBody))
@@ -129,19 +118,12 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	resp, err := forward(interceptedReq)
 	if err != nil {
 		http.Error(w, "bad gateway", http.StatusBadGateway)
-		logger.Error("%s %s: %v", r.Method, r.URL, err)
 		return
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxBodySize))
-	if err != nil {
-		http.Error(w, "failed to read response body", http.StatusBadGateway)
-		logger.Error("read response body %s %s: %v", r.Method, r.URL, err)
-		return
-	}
-
-	elapsed := time.Since(start).Milliseconds()
+	var respBuf bytes.Buffer
+	reader := io.TeeReader(io.LimitReader(resp.Body, maxBodySize), &respBuf)
 
 	for k, vals := range resp.Header {
 		for _, v := range vals {
@@ -149,18 +131,18 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	w.WriteHeader(resp.StatusCode)
-	if _, err := w.Write(respBody); err != nil {
-		logger.Error("write response to client: %v", err)
-	}
 
-	logger.Info("%s %s %d %db %dms", r.Method, r.URL, resp.StatusCode, len(respBody), elapsed)
+	_, _ = io.Copy(w, reader)
+
+	respBody := respBuf.Bytes()
+	elapsed := time.Since(start).Milliseconds()
 
 	logBody := internalhttp.Decompress(resp.Header, respBody)
 	if internalhttp.IsBinary(resp.Header) {
 		logBody = nil
 	}
 
-	if err := p.store.Log(store.Transaction{
+	_ = p.store.Log(store.Transaction{
 		Timestamp:   start,
 		Host:        interceptedReq.Host,
 		Proto:       "HTTP/1.1",
@@ -174,7 +156,5 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		DurationMs:  elapsed,
 		TLS:         false,
 		InScope:     p.store.InScope(interceptedReq.Host),
-	}); err != nil {
-		logger.Error("store transaction: %v", err)
-	}
+	})
 }

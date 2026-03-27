@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"io"
 	"net"
@@ -17,12 +18,17 @@ import (
 	"github.com/shiv/internal/store"
 )
 
-// handleConnectH2 serves an HTTP/2 MITM session on an already-established
-// TLS connection that negotiated "h2". It blocks until the connection closes.
+const (
+	h2UpstreamDialTimeout   = 10 * time.Second
+	h2UpstreamHeaderTimeout = 30 * time.Second
+	h2StreamRequestTimeout  = 60 * time.Second
+	h2MaxConcurrentStreams  = 250
+)
+
 func (p *Proxy) handleConnectH2(browserTLS *tls.Conn, connectReq *http.Request, bareHost string) {
 	upstreamTransport := &http.Transport{
 		DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			conn, err := (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, "tcp", addr)
+			conn, err := (&net.Dialer{Timeout: h2UpstreamDialTimeout}).DialContext(ctx, "tcp", addr)
 			if err != nil {
 				return nil, fmt.Errorf("mitm/h2: dial %s: %w", addr, err)
 			}
@@ -30,6 +36,28 @@ func (p *Proxy) handleConnectH2(browserTLS *tls.Conn, connectReq *http.Request, 
 				ServerName:         bareHost,
 				InsecureSkipVerify: true, //nolint:gosec
 				NextProtos:         []string{"h2", "http/1.1"},
+				VerifyPeerCertificate: func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
+					if len(rawCerts) == 0 {
+						return nil
+					}
+					cert, err := x509.ParseCertificate(rawCerts[0])
+					if err != nil {
+						return nil
+					}
+					now := time.Now()
+					if now.After(cert.NotAfter) {
+						logger.Info("mitm/h2: EXPIRED cert for %s (expired %s, issuer: %s)",
+							bareHost, cert.NotAfter.Format("2006-01-02"), cert.Issuer.CommonName)
+					} else if now.Before(cert.NotBefore) {
+						logger.Info("mitm/h2: NOT YET VALID cert for %s (valid from %s, issuer: %s)",
+							bareHost, cert.NotBefore.Format("2006-01-02"), cert.Issuer.CommonName)
+					}
+					if err := cert.VerifyHostname(bareHost); err != nil {
+						logger.Info("mitm/h2: hostname mismatch for %s: %v (CN: %s, SANs: %v)",
+							bareHost, err, cert.Subject.CommonName, cert.DNSNames)
+					}
+					return nil
+				},
 			})
 			if err := tlsConn.Handshake(); err != nil {
 				conn.Close()
@@ -37,7 +65,7 @@ func (p *Proxy) handleConnectH2(browserTLS *tls.Conn, connectReq *http.Request, 
 			}
 			return tlsConn, nil
 		},
-		ResponseHeaderTimeout: 30 * time.Second,
+		ResponseHeaderTimeout: h2UpstreamHeaderTimeout,
 	}
 	if err := http2.ConfigureTransport(upstreamTransport); err != nil {
 		logger.Error("mitm/h2: configure upstream transport: %v", err)
@@ -46,7 +74,6 @@ func (p *Proxy) handleConnectH2(browserTLS *tls.Conn, connectReq *http.Request, 
 
 	upstreamClient := &http.Client{
 		Transport: upstreamTransport,
-		Timeout:   60 * time.Second,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
@@ -72,7 +99,10 @@ func (p *Proxy) handleConnectH2(browserTLS *tls.Conn, connectReq *http.Request, 
 			return
 		}
 
-		outReq, err := http.NewRequestWithContext(req.Context(), interceptedReq.Method, interceptedReq.URL.String(), bytes.NewReader(reqBody))
+		streamCtx, cancel := context.WithTimeout(req.Context(), h2StreamRequestTimeout)
+		defer cancel()
+
+		outReq, err := http.NewRequestWithContext(streamCtx, interceptedReq.Method, interceptedReq.URL.String(), bytes.NewReader(reqBody))
 		if err != nil {
 			logger.Error("mitm/h2: build upstream request for %s: %v", bareHost, err)
 			http.Error(w, "internal error", http.StatusInternalServerError)
@@ -89,16 +119,8 @@ func (p *Proxy) handleConnectH2(browserTLS *tls.Conn, connectReq *http.Request, 
 			return
 		}
 
-		respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxBodySize))
-		resp.Body.Close()
-		if err != nil {
-			logger.Error("mitm/h2: read response body for %s: %v", bareHost, err)
-			http.Error(w, "bad gateway", http.StatusBadGateway)
-			return
-		}
-
-		elapsed := time.Since(start).Milliseconds()
-		logger.Info("%s %s %d %db %dms (h2)", interceptedReq.Method, interceptedReq.URL, resp.StatusCode, len(respBody), elapsed)
+		var respBuf bytes.Buffer
+		reader := io.TeeReader(io.LimitReader(resp.Body, maxBodySize), &respBuf)
 
 		internalhttp.StripResponseCacheHeaders(resp.Header)
 		for k, vals := range resp.Header {
@@ -107,9 +129,16 @@ func (p *Proxy) handleConnectH2(browserTLS *tls.Conn, connectReq *http.Request, 
 			}
 		}
 		w.WriteHeader(resp.StatusCode)
-		if _, err := w.Write(respBody); err != nil {
+
+		if _, err := io.Copy(w, reader); err != nil {
 			logger.Debug("mitm/h2: write response to browser for %s: %v", bareHost, err)
 		}
+
+		respBody := respBuf.Bytes()
+		resp.Body.Close()
+
+		elapsed := time.Since(start).Milliseconds()
+		logger.Info("%s %s %d %db %dms (h2)", interceptedReq.Method, interceptedReq.URL, resp.StatusCode, len(respBody), elapsed)
 
 		logBody := internalhttp.Decompress(resp.Header, respBody)
 		if internalhttp.IsBinary(resp.Header) {
@@ -135,7 +164,9 @@ func (p *Proxy) handleConnectH2(browserTLS *tls.Conn, connectReq *http.Request, 
 		}
 	})
 
-	h2srv := &http2.Server{}
+	h2srv := &http2.Server{
+		MaxConcurrentStreams: h2MaxConcurrentStreams,
+	}
 	h2srv.ServeConn(browserTLS, &http2.ServeConnOpts{
 		Handler: streamHandler,
 	})

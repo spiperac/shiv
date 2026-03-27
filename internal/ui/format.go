@@ -73,7 +73,11 @@ func FormatStoreRequest(tx store.Transaction) string {
 // suitable for display in the UI.
 func FormatStoreResponse(tx store.Transaction) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "HTTP/1.1 %d\r\n", tx.StatusCode)
+	proto := tx.Proto
+	if proto == "" {
+		proto = "HTTP/1.1"
+	}
+	fmt.Fprintf(&b, "%s %d\r\n", proto, tx.StatusCode)
 
 	keys := sortedKeys(tx.RespHeaders)
 	for _, k := range keys {
