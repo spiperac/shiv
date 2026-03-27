@@ -19,10 +19,11 @@ type interceptTab struct {
 	projectStore *store.Store
 	pending      *store.PendingRequest
 
-	toggle  *widget.Check
-	editor  *widget.Entry
-	forward *widget.Button
-	drop    *widget.Button
+	toggle     *widget.Check
+	editor     *widget.Entry
+	forward    *widget.Button
+	drop       *widget.Button
+	forwardAll *widget.Button
 }
 
 func newInterceptTab(projectStore *store.Store) *interceptTab {
@@ -33,7 +34,15 @@ func (t *interceptTab) build() fyne.CanvasObject {
 	t.toggle = widget.NewCheck("Intercept ON", func(on bool) {
 		t.projectStore.Intercept.SetEnabled(on)
 		if !on {
-			t.forwardAllPending()
+			// SetEnabled(false) triggers bypass internally — all goroutines
+			// blocked in Hold are released. We only need to handle whatever
+			// the UI is currently displaying.
+			if t.pending != nil {
+				old := t.pending
+				t.pending = nil
+				old.Reply <- store.Decision{Forward: true, Request: old.Request, Body: old.Body}
+			}
+			t.clearEditor()
 		}
 	})
 
@@ -49,11 +58,25 @@ func (t *interceptTab) build() fyne.CanvasObject {
 	t.drop = widget.NewButtonWithIcon("Drop", theme.DeleteIcon(), func() {
 		t.decide(false)
 	})
+	t.forwardAll = widget.NewButtonWithIcon("Forward All", theme.MediaFastForwardIcon(), func() {
+		// Forward whatever is currently displayed, then signal the gate to
+		// release all goroutines currently blocked in Hold. Future requests
+		// will be intercepted normally — ForwardAll is a one-shot release.
+		if t.pending != nil {
+			old := t.pending
+			t.pending = nil
+			old.Reply <- store.Decision{Forward: true, Request: old.Request, Body: old.Body}
+		}
+		t.clearEditor()
+		t.projectStore.Intercept.ForwardAll()
+	})
+
 	t.forward.Importance = widget.HighImportance
 	t.forward.Disable()
 	t.drop.Disable()
+	t.forwardAll.Disable()
 
-	buttons := container.NewHBox(t.forward, t.drop)
+	buttons := container.NewHBox(t.forward, t.drop, t.forwardAll)
 
 	content := container.NewBorder(
 		container.NewVBox(t.toggle, widget.NewSeparator()),
@@ -67,23 +90,24 @@ func (t *interceptTab) build() fyne.CanvasObject {
 	return content
 }
 
+// watchQueue reads from the gate queue and presents requests to the UI one at
+// a time. Cancelled pending (released by bypass before the UI processed them)
+// are skipped via the double IsDone check — once on the watchQueue goroutine
+// and once inside fyne.Do on the main goroutine.
 func (t *interceptTab) watchQueue() {
 	for pending := range t.projectStore.Intercept.Queue() {
-		pendingRequest := pending
+		p := pending
+		// Fast path: already cancelled before we even schedule fyne.Do.
+		if p.IsDone() {
+			continue
+		}
 		fyne.Do(func() {
-			// If a request is already waiting for a decision, forward it
-			// unmodified before replacing it with the new one. Without this
-			// the old proxy goroutine blocks forever on its Reply channel.
-			if t.pending != nil {
-				old := t.pending
-				t.pending = nil
-				old.Reply <- store.Decision{
-					Forward: true,
-					Request: old.Request,
-					Body:    old.Body,
-				}
+			// Second check: may have been cancelled between the fast path above
+			// and this callback executing on the main goroutine.
+			if p.IsDone() {
+				return
 			}
-			t.showRequest(pendingRequest)
+			t.showRequest(p)
 		})
 	}
 }
@@ -94,6 +118,7 @@ func (t *interceptTab) showRequest(p *store.PendingRequest) {
 	t.editor.SetText(internalhttp.FormatRequest(p.Request, p.Body))
 	t.forward.Enable()
 	t.drop.Enable()
+	t.forwardAll.Enable()
 }
 
 func (t *interceptTab) decide(forward bool) {
@@ -118,32 +143,12 @@ func (t *interceptTab) decide(forward bool) {
 	}
 }
 
-// forwardAllPending forwards the currently displayed request (if any) and
-// drains the queue, forwarding every queued request unmodified. Called when
-// the user turns intercept off so no proxy goroutines are left blocked.
-func (t *interceptTab) forwardAllPending() {
-	if t.pending != nil {
-		old := t.pending
-		t.pending = nil
-		old.Reply <- store.Decision{Forward: true, Request: old.Request, Body: old.Body}
-	}
-	t.clearEditor()
-
-	for {
-		select {
-		case queued := <-t.projectStore.Intercept.Queue():
-			queued.Reply <- store.Decision{Forward: true, Request: queued.Request, Body: queued.Body}
-		default:
-			return
-		}
-	}
-}
-
 func (t *interceptTab) clearEditor() {
 	t.editor.SetText("")
 	t.editor.Disable()
 	t.forward.Disable()
 	t.drop.Disable()
+	t.forwardAll.Disable()
 }
 
 func parseRawRequest(raw string, original *http.Request) (*http.Request, []byte, error) {

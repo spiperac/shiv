@@ -234,6 +234,35 @@ func newHistoryTab(projectStore *store.Store, win fyne.Window, repeater *repeate
 	}
 }
 
+func (h *historyTab) buildSiteMapPane() fyne.CanvasObject {
+	addScopeBtn := widget.NewButtonWithIcon("", AppIcon("scope"), func() {
+		if h.selectedUID == "" {
+			return
+		}
+		host, _, ok := parseNodeID(h.selectedUID)
+		if !ok {
+			return
+		}
+		bareHost, _, err := net.SplitHostPort(host)
+		if err != nil {
+			bareHost = host
+		}
+		h.projectStore.AddScopeEntry(bareHost)
+		h.mu.Lock()
+		for i := range h.rows {
+			if h.rows[i].Host == host {
+				h.rows[i].InScope = true
+			}
+		}
+		h.mu.Unlock()
+		h.tree.Refresh()
+		h.applyFilter()
+	})
+
+	header := container.NewHBox(newBoldLabel("Site Map"), layout.NewSpacer(), addScopeBtn)
+	return container.NewBorder(header, nil, nil, nil, h.tree)
+}
+
 func (h *historyTab) build() fyne.CanvasObject {
 	h.filterEntry = widget.NewEntry()
 	h.filterEntry.SetPlaceHolder("Filter — host, path, method, status...")
@@ -280,11 +309,14 @@ func (h *historyTab) build() fyne.CanvasObject {
 		h.respLabel.SetText("")
 	})
 
+	exportHARBtn := widget.NewButtonWithIcon("Export HAR", AppIcon("document"), func() {
+		h.exportHAR()
+	})
+
 	filterBar := container.NewBorder(nil, nil, nil,
-		container.NewHBox(h.showOutScope, h.scopeBtn, clearBtn),
+		container.NewHBox(h.showOutScope, h.scopeBtn, exportHARBtn, clearBtn),
 		h.filterEntry,
 	)
-
 	h.tree = widget.NewTree(
 		h.siteMap.childUIDs,
 		h.siteMap.isBranch,
@@ -429,33 +461,7 @@ func (h *historyTab) build() fyne.CanvasObject {
 	detailSplit.SetOffset(0.5)
 
 	topSplit := container.NewHSplit(
-		container.NewBorder(
-			container.NewHBox(newBoldLabel("Site Map"), layout.NewSpacer(), widget.NewButtonWithIcon("", AppIcon("scope"), func() {
-				if h.selectedUID == "" {
-					return
-				}
-				host, _, ok := parseNodeID(h.selectedUID)
-				if !ok {
-					return
-				}
-				bareHost, _, err := net.SplitHostPort(host)
-				if err != nil {
-					bareHost = host
-				}
-				h.projectStore.AddScopeEntry(bareHost)
-				h.mu.Lock()
-				for i := range h.rows {
-					if h.rows[i].Host == host {
-						h.rows[i].InScope = true
-					}
-				}
-				h.mu.Unlock()
-				h.tree.Refresh()
-				h.applyFilter()
-			})),
-			nil, nil, nil,
-			h.tree,
-		),
+		h.buildSiteMapPane(),
 		container.NewBorder(filterBar, nil, nil, nil, tableObj),
 	)
 	topSplit.SetOffset(0.25)
@@ -513,7 +519,6 @@ func (h *historyTab) applyFilter() {
 				if path != "" {
 					txPath := PathOf(tx.URL)
 					// Exact match or child path.
-					// /login must not match /login-redirect.
 					if txPath != path && !strings.HasPrefix(txPath, path+"/") {
 						continue
 					}
