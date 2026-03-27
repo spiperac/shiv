@@ -48,7 +48,7 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 
 	browserTLS := tls.Server(clientConn, &tls.Config{
 		Certificates: []tls.Certificate{*tlsCert},
-		NextProtos:   []string{"http/1.1"},
+		NextProtos:   []string{"h2", "http/1.1"},
 	})
 	if err := browserTLS.Handshake(); err != nil {
 		logger.Debug("mitm: browser TLS handshake for %s: %v", bareHost, err)
@@ -56,6 +56,13 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	}
 	defer browserTLS.Close()
 
+	// Dispatch based on the protocol negotiated during TLS handshake.
+	if browserTLS.ConnectionState().NegotiatedProtocol == "h2" {
+		p.handleConnectH2(browserTLS, r, bareHost)
+		return
+	}
+
+	// HTTP/1.1 path — unchanged.
 	transport := &http.Transport{
 		DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			conn, err := (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, "tcp", addr)
@@ -128,7 +135,6 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		outReq.Header = interceptedReq.Header.Clone()
-		// Use bare host (no port) so the upstream sees a clean Host header.
 		outReq.Host = internalhttp.NormalizeHost(bareHost, true)
 		internalhttp.StripRequestCacheHeaders(outReq.Header)
 
