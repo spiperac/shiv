@@ -252,7 +252,10 @@ func (h *historyTab) build() fyne.CanvasObject {
 	h.showOutScope.Checked = true
 
 	h.scopeBtn = widget.NewButtonWithIcon("Scope", AppIcon("scope"), func() {
-		showScopeDialog(h.projectStore, h.win)
+		showScopeDialog(h.projectStore, h.win, func() {
+			h.tree.Refresh()
+			h.applyFilter()
+		})
 	})
 
 	clearBtn := widget.NewButtonWithIcon("Clear", AppIcon("delete"), func() {
@@ -438,6 +441,15 @@ func (h *historyTab) build() fyne.CanvasObject {
 					bareHost = host
 				}
 				h.projectStore.AddScopeEntry(bareHost)
+				h.mu.Lock()
+				for i := range h.rows {
+					if h.rows[i].Host == host {
+						h.rows[i].InScope = true
+					}
+				}
+				h.mu.Unlock()
+				h.tree.Refresh()
+				h.applyFilter()
 			})),
 			nil, nil, nil,
 			h.tree,

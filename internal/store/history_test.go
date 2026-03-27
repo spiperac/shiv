@@ -43,7 +43,7 @@ func TestLog_Insert(t *testing.T) {
 	assert.True(t, txs[0].InScope)
 }
 
-func TestLog_Dedup_SameMethodHostURLStatus(t *testing.T) {
+func TestLog_NoDedup_SameMethodHostURLStatus(t *testing.T) {
 	st := newTestStore(t)
 
 	tx := makeTx("GET", "example.com", "https://example.com/", 200)
@@ -52,7 +52,7 @@ func TestLog_Dedup_SameMethodHostURLStatus(t *testing.T) {
 
 	txs, err := st.AllTransactions()
 	require.NoError(t, err)
-	assert.Len(t, txs, 1, "duplicate must update, not insert")
+	assert.Len(t, txs, 2, "no dedup — every request is a unique row")
 }
 
 func TestLog_NoDedupOnDifferentStatus(t *testing.T) {
@@ -116,17 +116,17 @@ func TestAllTransactions_OrderedByIDDesc(t *testing.T) {
 	assert.Equal(t, "first.com", txs[2].Host)
 }
 
-func TestAllTransactions_CappedAt100(t *testing.T) {
+func TestAllTransactions_CappedAt500(t *testing.T) {
 	st := newTestStore(t)
 
-	for i := 0; i < 110; i++ {
+	for i := 0; i < 510; i++ {
 		url := fmt.Sprintf("https://example.com/path/%d", i)
 		require.NoError(t, st.Log(makeTx("GET", "example.com", url, 200)))
 	}
 
 	txs, err := st.AllTransactions()
 	require.NoError(t, err)
-	assert.LessOrEqual(t, len(txs), 100)
+	assert.LessOrEqual(t, len(txs), 500)
 }
 
 func TestGetTransaction_ReturnsFullBodies(t *testing.T) {

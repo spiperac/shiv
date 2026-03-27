@@ -8,9 +8,16 @@ import (
 	"testing"
 
 	"github.com/andybalholm/brotli"
+	"github.com/klauspost/compress/zstd"
+	internalhttp "github.com/shiv/internal/http"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func decompressBody(h http.Header, body []byte) []byte { return internalhttp.Decompress(h, body) }
+func isBinary(h http.Header) bool                      { return internalhttp.IsBinary(h) }
+func stripRequestCacheHeaders(h http.Header)           { internalhttp.StripRequestCacheHeaders(h) }
+func stripResponseCacheHeaders(h http.Header)          { internalhttp.StripResponseCacheHeaders(h) }
 
 // ── decompressBody ────────────────────────────────────────────────────────────
 
@@ -64,12 +71,14 @@ func TestDecompressBody_Brotli(t *testing.T) {
 	assert.Equal(t, "brotli content", string(out))
 }
 
-func TestDecompressBody_Zstd_ReturnedAsIs(t *testing.T) {
-	// zstd is not decompressed — returned as-is
-	body := []byte("zstd blob")
+func TestDecompressBody_Zstd(t *testing.T) {
+	enc, err := zstd.NewWriter(nil)
+	require.NoError(t, err)
+	compressed := enc.EncodeAll([]byte("zstd content"), nil)
+
 	h := http.Header{"Content-Encoding": []string{"zstd"}}
-	out := decompressBody(h, body)
-	assert.Equal(t, body, out)
+	out := decompressBody(h, compressed)
+	assert.Equal(t, "zstd content", string(out))
 }
 
 func TestDecompressBody_UnknownEncoding(t *testing.T) {
@@ -122,17 +131,15 @@ func TestIsBinary_OctetStream(t *testing.T) {
 }
 
 func TestIsBinary_NoContentType(t *testing.T) {
-	// empty content-type is treated as non-binary
 	assert.False(t, isBinary(http.Header{}))
 }
 
 func TestIsBinary_ZstdEncoding(t *testing.T) {
-	// zstd content-encoding means binary regardless of content-type
 	h := http.Header{
 		"Content-Encoding": []string{"zstd"},
 		"Content-Type":     []string{"text/plain"},
 	}
-	assert.True(t, isBinary(h))
+	assert.False(t, isBinary(h))
 }
 
 // ── stripRequestCacheHeaders ──────────────────────────────────────────────────
@@ -144,7 +151,7 @@ func TestStripRequestCacheHeaders(t *testing.T) {
 		"If-Range":            []string{`"etag123"`},
 		"If-Match":            []string{`"etag123"`},
 		"If-Unmodified-Since": []string{"Mon, 01 Jan 2024 00:00:00 GMT"},
-		"Authorization":       []string{"Bearer token"}, // must be preserved
+		"Authorization":       []string{"Bearer token"},
 	}
 	stripRequestCacheHeaders(h)
 
@@ -153,12 +160,11 @@ func TestStripRequestCacheHeaders(t *testing.T) {
 	assert.Empty(t, h.Get("If-Range"))
 	assert.Empty(t, h.Get("If-Match"))
 	assert.Empty(t, h.Get("If-Unmodified-Since"))
-	assert.Equal(t, "Bearer token", h.Get("Authorization"), "non-cache headers must not be touched")
+	assert.Equal(t, "Bearer token", h.Get("Authorization"))
 }
 
 func TestStripRequestCacheHeaders_AlreadyAbsent(t *testing.T) {
 	h := http.Header{"Content-Type": []string{"application/json"}}
-	// must not panic when headers are not present
 	assert.NotPanics(t, func() { stripRequestCacheHeaders(h) })
 	assert.Equal(t, "application/json", h.Get("Content-Type"))
 }
@@ -172,7 +178,7 @@ func TestStripResponseCacheHeaders(t *testing.T) {
 		"ETag":          []string{`"etag123"`},
 		"Last-Modified": []string{"Mon, 01 Jan 2024 00:00:00 GMT"},
 		"Pragma":        []string{"no-cache"},
-		"Content-Type":  []string{"text/html"}, // must be preserved
+		"Content-Type":  []string{"text/html"},
 	}
 	stripResponseCacheHeaders(h)
 
@@ -181,11 +187,10 @@ func TestStripResponseCacheHeaders(t *testing.T) {
 	assert.Empty(t, h.Get("ETag"))
 	assert.Empty(t, h.Get("Last-Modified"))
 	assert.Empty(t, h.Get("Pragma"))
-	assert.Equal(t, "text/html", h.Get("Content-Type"), "non-cache headers must not be touched")
+	assert.Equal(t, "text/html", h.Get("Content-Type"))
 }
 
 func TestStripResponseCacheHeaders_SetsNoCacheDirective(t *testing.T) {
-	// Even when Cache-Control was absent it must be set
 	h := http.Header{}
 	stripResponseCacheHeaders(h)
 	assert.Equal(t, "no-store, no-cache, must-revalidate", h.Get("Cache-Control"))

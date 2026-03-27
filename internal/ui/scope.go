@@ -14,7 +14,7 @@ import (
 	"github.com/shiv/internal/store"
 )
 
-func showScopeDialog(projectStore *store.Store, win fyne.Window) {
+func showScopeDialog(projectStore *store.Store, win fyne.Window, onChanged func()) {
 	entries, err := projectStore.AllScopeEntries()
 	if err != nil {
 		logger.Error("scope: load entries: %v", err)
@@ -83,6 +83,7 @@ func showScopeDialog(projectStore *store.Store, win fyne.Window) {
 		}
 		hostEntry.SetText("")
 		list.Refresh()
+		onChanged()
 	})
 	addBtn.Importance = widget.HighImportance
 
@@ -103,6 +104,7 @@ func showScopeDialog(projectStore *store.Store, win fyne.Window) {
 		selectedIdx = -1
 		deleteBtn.Disable()
 		list.Refresh()
+		onChanged()
 	})
 	deleteBtn.Disable()
 
