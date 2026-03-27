@@ -55,14 +55,13 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer browserTLS.Close()
+	logger.Debug("mitm: negotiated protocol for %s: %q", bareHost, browserTLS.ConnectionState().NegotiatedProtocol)
 
-	// Dispatch based on the protocol negotiated during TLS handshake.
 	if browserTLS.ConnectionState().NegotiatedProtocol == "h2" {
 		p.handleConnectH2(browserTLS, r, bareHost)
 		return
 	}
 
-	// HTTP/1.1 path — unchanged.
 	transport := &http.Transport{
 		DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			conn, err := (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, "tcp", addr)
@@ -169,6 +168,7 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		if err := p.store.Log(store.Transaction{
 			Timestamp:   start,
 			Host:        r.Host,
+			Proto:       "HTTP/1.1",
 			Method:      interceptedReq.Method,
 			URL:         interceptedReq.URL.String(),
 			ReqHeaders:  interceptedReq.Header,

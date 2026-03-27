@@ -163,6 +163,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err := p.store.Log(store.Transaction{
 		Timestamp:   start,
 		Host:        interceptedReq.Host,
+		Proto:       "HTTP/1.1",
 		Method:      interceptedReq.Method,
 		URL:         interceptedReq.URL.String(),
 		ReqHeaders:  interceptedReq.Header,

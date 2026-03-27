@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
@@ -195,6 +196,7 @@ type historyTab struct {
 	mu       sync.RWMutex
 	rows     []store.Transaction
 	filtered []store.Transaction
+	maxID    uint64 // highest transaction ID seen, for poll fallback
 
 	siteMap     *siteMap
 	tree        *widget.Tree
@@ -266,6 +268,7 @@ func (h *historyTab) build() fyne.CanvasObject {
 		h.mu.Lock()
 		h.rows = nil
 		h.filtered = nil
+		h.maxID = 0
 		h.mu.Unlock()
 		h.siteMap.clear()
 		h.selectedUID = ""
@@ -300,7 +303,6 @@ func (h *historyTab) build() fyne.CanvasObject {
 				if hasSuffix(labelFor(uid), ".jpg", ".jpeg", ".png", ".svg", ".gif") {
 					icon.SetResource(AppIcon("media"))
 				} else {
-
 					icon.SetResource(AppIcon("document"))
 				}
 			}
@@ -470,6 +472,9 @@ func (h *historyTab) build() fyne.CanvasObject {
 		fyne.Do(func() {
 			h.mu.Lock()
 			h.rows = txs
+			if len(txs) > 0 {
+				h.maxID = txs[0].ID
+			}
 			h.mu.Unlock()
 			for _, tx := range txs {
 				h.siteMap.add(tx)
@@ -480,6 +485,7 @@ func (h *historyTab) build() fyne.CanvasObject {
 	}()
 
 	go h.watchUpdates()
+	go h.pollMissed()
 
 	return mainSplit
 }
@@ -545,9 +551,19 @@ func (h *historyTab) watchUpdates() {
 		transaction := tx
 		fyne.Do(func() {
 			h.mu.Lock()
+			// Deduplicate — poll may have already inserted this ID.
+			for _, r := range h.rows {
+				if r.ID == transaction.ID {
+					h.mu.Unlock()
+					return
+				}
+			}
 			h.rows = append([]store.Transaction{transaction}, h.rows...)
 			if len(h.rows) > 10000 {
 				h.rows = h.rows[:10000]
+			}
+			if transaction.ID > h.maxID {
+				h.maxID = transaction.ID
 			}
 			isSelected := h.hasSelected && h.selectedTx.ID == transaction.ID
 			if isSelected {
@@ -560,6 +576,58 @@ func (h *historyTab) watchUpdates() {
 			h.applyFilter()
 			if isSelected {
 				h.showDetail(transaction)
+			}
+		})
+	}
+}
+
+// pollMissed polls the DB every second for transactions that were dropped by
+// the Updates channel when it was full under high H2 concurrency.
+func (h *historyTab) pollMissed() {
+	defer recoverPanic("pollMissed")
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for range ticker.C {
+		h.mu.RLock()
+		afterID := h.maxID
+		h.mu.RUnlock()
+
+		txs, err := h.projectStore.TransactionsSince(afterID)
+		if err != nil {
+			logger.Error("history: poll: %v", err)
+			continue
+		}
+		if len(txs) == 0 {
+			continue
+		}
+
+		fyne.Do(func() {
+			h.mu.Lock()
+			// Build a set of known IDs for dedup.
+			known := make(map[uint64]bool, len(h.rows))
+			for _, r := range h.rows {
+				known[r.ID] = true
+			}
+			var added bool
+			for _, tx := range txs {
+				if known[tx.ID] {
+					continue
+				}
+				h.rows = append([]store.Transaction{tx}, h.rows...)
+				if tx.ID > h.maxID {
+					h.maxID = tx.ID
+				}
+				added = true
+				h.siteMap.add(tx)
+			}
+			if len(h.rows) > 10000 {
+				h.rows = h.rows[:10000]
+			}
+			h.mu.Unlock()
+
+			if added {
+				h.tree.Refresh()
+				h.applyFilter()
 			}
 		})
 	}

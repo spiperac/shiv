@@ -20,8 +20,8 @@ import (
 // handleConnectH2 serves an HTTP/2 MITM session on an already-established
 // TLS connection that negotiated "h2". It blocks until the connection closes.
 func (p *Proxy) handleConnectH2(browserTLS *tls.Conn, connectReq *http.Request, bareHost string) {
-	upstreamTransport := &http2.Transport{
-		DialTLSContext: func(ctx context.Context, network, addr string, cfg *tls.Config) (net.Conn, error) {
+	upstreamTransport := &http.Transport{
+		DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			conn, err := (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, "tcp", addr)
 			if err != nil {
 				return nil, fmt.Errorf("mitm/h2: dial %s: %w", addr, err)
@@ -37,6 +37,10 @@ func (p *Proxy) handleConnectH2(browserTLS *tls.Conn, connectReq *http.Request, 
 			}
 			return tlsConn, nil
 		},
+		ResponseHeaderTimeout: 30 * time.Second,
+	}
+	if err := http2.ConfigureTransport(upstreamTransport); err != nil {
+		logger.Error("mitm/h2: configure upstream transport: %v", err)
 	}
 	defer upstreamTransport.CloseIdleConnections()
 
@@ -79,7 +83,6 @@ func (p *Proxy) handleConnectH2(browserTLS *tls.Conn, connectReq *http.Request, 
 		internalhttp.StripRequestCacheHeaders(outReq.Header)
 
 		resp, err := upstreamClient.Do(outReq)
-		logger.Debug("mitm/h2: dialing %s url=%s", bareHost, outReq.URL.String())
 		if err != nil {
 			logger.Error("mitm/h2: upstream request for %s: %v", bareHost, err)
 			http.Error(w, "bad gateway", http.StatusBadGateway)
@@ -116,6 +119,7 @@ func (p *Proxy) handleConnectH2(browserTLS *tls.Conn, connectReq *http.Request, 
 		if err := p.store.Log(store.Transaction{
 			Timestamp:   start,
 			Host:        connectReq.Host,
+			Proto:       "HTTP/2",
 			Method:      interceptedReq.Method,
 			URL:         interceptedReq.URL.String(),
 			ReqHeaders:  interceptedReq.Header,

@@ -88,13 +88,15 @@ func (s *Store) migrate() error {
 	if err != nil {
 		return fmt.Errorf("store: migrate: %w", err)
 	}
-	// Add new columns to existing tables if they don't exist
+	// Add new columns to existing tables if they don't exist.
+	// Errors are ignored — column may already exist.
 	migrations := []string{
 		`ALTER TABLE loot ADD COLUMN raw_request TEXT DEFAULT ''`,
 		`ALTER TABLE loot ADD COLUMN raw_response TEXT DEFAULT ''`,
+		`ALTER TABLE history ADD COLUMN proto TEXT NOT NULL DEFAULT 'HTTP/1.1'`,
 	}
 	for _, migration := range migrations {
-		s.db.Exec(migration) // ignore errors — column may already exist
+		s.db.Exec(migration)
 	}
 	return nil
 }
@@ -111,6 +113,7 @@ CREATE TABLE IF NOT EXISTS history (
 	host         TEXT    NOT NULL,
 	method       TEXT    NOT NULL,
 	url          TEXT    NOT NULL,
+	proto        TEXT    NOT NULL DEFAULT 'HTTP/1.1',
 	req_headers  TEXT    NOT NULL,
 	req_body     BLOB,
 	status_code  INTEGER,

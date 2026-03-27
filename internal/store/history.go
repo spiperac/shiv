@@ -14,6 +14,7 @@ type Transaction struct {
 	Host        string
 	Method      string
 	URL         string
+	Proto       string // "HTTP/2" or "HTTP/1.1"
 	ReqHeaders  http.Header
 	ReqBody     []byte
 	StatusCode  int
@@ -29,12 +30,12 @@ func (s *Store) GetTransaction(id uint64) (*Transaction, error) {
 	var timestampStr, reqHeaders, respHeaders string
 	var tlsFlag, scopeFlag int
 	err := s.db.QueryRow(`
-		SELECT id, timestamp, host, method, url,
+		SELECT id, timestamp, host, method, url, proto,
 		       req_headers, req_body, status_code, resp_headers,
 		       resp_body, duration_ms, tls, in_scope
 		FROM history WHERE id = ?`, id,
 	).Scan(
-		&transaction.ID, &timestampStr, &transaction.Host, &transaction.Method, &transaction.URL,
+		&transaction.ID, &timestampStr, &transaction.Host, &transaction.Method, &transaction.URL, &transaction.Proto,
 		&reqHeaders, &transaction.ReqBody, &transaction.StatusCode, &respHeaders,
 		&transaction.RespBody, &transaction.DurationMs, &tlsFlag, &scopeFlag,
 	)
@@ -64,13 +65,17 @@ func (s *Store) Log(t Transaction) error {
 		if err != nil {
 			return fmt.Errorf("store: marshal resp headers: %w", err)
 		}
+		proto := t.Proto
+		if proto == "" {
+			proto = "HTTP/1.1"
+		}
 		res, err := s.db.Exec(`
 			INSERT INTO history
-				(timestamp, host, method, url, req_headers, req_body,
+				(timestamp, host, method, url, proto, req_headers, req_body,
 				 status_code, resp_headers, resp_body, duration_ms, tls, in_scope)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			t.Timestamp.UTC().Format(time.RFC3339),
-			t.Host, t.Method, t.URL,
+			t.Host, t.Method, t.URL, proto,
 			string(reqH), t.ReqBody,
 			t.StatusCode, string(respH), t.RespBody,
 			t.DurationMs,
@@ -82,6 +87,7 @@ func (s *Store) Log(t Transaction) error {
 		}
 		id, _ := res.LastInsertId()
 		t.ID = uint64(id)
+		t.Proto = proto
 		select {
 		case s.Updates <- t:
 		default:
@@ -94,13 +100,30 @@ func (s *Store) Log(t Transaction) error {
 // Bodies are omitted for performance; use GetTransaction for the full row.
 func (s *Store) AllTransactions() ([]Transaction, error) {
 	rows, err := s.db.Query(`
-		SELECT id, timestamp, host, method, url,
+		SELECT id, timestamp, host, method, url, proto,
 		       req_headers, '' as req_body, status_code, resp_headers,
 		       '' as resp_body, duration_ms, tls, in_scope
 		FROM history
 		ORDER BY id DESC LIMIT 500`)
 	if err != nil {
 		return nil, fmt.Errorf("store: query history: %w", err)
+	}
+	defer rows.Close()
+	return scanTransactions(rows)
+}
+
+// TransactionsSince returns all transactions with id > afterID, newest first,
+// capped at 200. Bodies are omitted for performance.
+func (s *Store) TransactionsSince(afterID uint64) ([]Transaction, error) {
+	rows, err := s.db.Query(`
+		SELECT id, timestamp, host, method, url, proto,
+		       req_headers, '' as req_body, status_code, resp_headers,
+		       '' as resp_body, duration_ms, tls, in_scope
+		FROM history
+		WHERE id > ?
+		ORDER BY id DESC LIMIT 200`, afterID)
+	if err != nil {
+		return nil, fmt.Errorf("store: query history since %d: %w", afterID, err)
 	}
 	defer rows.Close()
 	return scanTransactions(rows)
@@ -128,7 +151,7 @@ func scanTransactions(rows interface {
 		var ts, reqH, respH string
 		var tlsInt, scopeInt int
 		if err := rows.Scan(
-			&tx.ID, &ts, &tx.Host, &tx.Method, &tx.URL,
+			&tx.ID, &ts, &tx.Host, &tx.Method, &tx.URL, &tx.Proto,
 			&reqH, &tx.ReqBody, &tx.StatusCode, &respH,
 			&tx.RespBody, &tx.DurationMs, &tlsInt, &scopeInt,
 		); err != nil {
