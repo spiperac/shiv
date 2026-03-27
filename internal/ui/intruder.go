@@ -13,6 +13,7 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/storage"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
@@ -216,7 +217,7 @@ func (t *intruderTab) build() fyne.CanvasObject {
 			return
 		}
 		host, port, useTLS := internalhttp.ParseHostFromRaw(t.selectedResult.rawReq)
-		path := PathOf(extractURLFromRaw(t.selectedResult.rawReq))
+		path := PathOf(internalhttp.ExtractURL(t.selectedResult.rawReq))
 		if len(path) > 20 {
 			path = path[:20] + "..."
 		}
@@ -335,12 +336,11 @@ func (t *intruderTab) build() fyne.CanvasObject {
 		container.NewBorder(newBoldLabel("Response"), nil, nil, nil, t.responsePane.Build()),
 	)
 
-	toolbar := container.NewHBox(t.startBtn, t.stopBtn, configBtn, clearBtn, t.progressLabel)
+	toolbar := container.NewHBox(t.startBtn, t.stopBtn, configBtn, clearBtn, t.progressLabel, layout.NewSpacer(), loadPayloadsBtn)
 
 	payloadPane := container.NewBorder(
 		newBoldLabel("Payloads"),
-		container.NewHBox(loadPayloadsBtn),
-		nil, nil,
+		nil, nil, nil,
 		t.payloadEntry,
 	)
 
@@ -635,7 +635,7 @@ func (t *intruderTab) contextMenuItems(result intruderResult) []widgets.ContextM
 			Label: "Send to Repeater",
 			Action: func() {
 				host, port, useTLS := internalhttp.ParseHostFromRaw(result.rawReq)
-				path := PathOf(extractURLFromRaw(result.rawReq))
+				path := PathOf(internalhttp.ExtractURL(result.rawReq))
 				if len(path) > 20 {
 					path = path[:20] + "..."
 				}

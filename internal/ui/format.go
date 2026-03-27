@@ -39,9 +39,9 @@ func PrettyJSON(body []byte) []byte {
 	return buf.Bytes()
 }
 
-// FormatRequest serialises a Transaction into a raw HTTP/1.1 request string
+// FormatStoreRequest serialises a Transaction into a raw HTTP/1.1 request string
 // suitable for display in the UI or sending via Repeater/Intruder.
-func FormatRequest(tx store.Transaction) string {
+func FormatStoreRequest(tx store.Transaction) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s %s HTTP/1.1\r\n", tx.Method, PathOf(tx.URL))
 	fmt.Fprintf(&b, "Host: %s\r\n", tx.Host)
@@ -59,9 +59,9 @@ func FormatRequest(tx store.Transaction) string {
 	return b.String()
 }
 
-// FormatResponse serialises a Transaction into a raw HTTP/1.1 response string
+// FormatStoreResponse serialises a Transaction into a raw HTTP/1.1 response string
 // suitable for display in the UI.
-func FormatResponse(tx store.Transaction) string {
+func FormatStoreResponse(tx store.Transaction) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "HTTP/1.1 %d\r\n", tx.StatusCode)
 

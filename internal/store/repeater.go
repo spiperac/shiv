@@ -1,7 +1,6 @@
 package store
 
 import (
-	"database/sql"
 	"fmt"
 )
 
@@ -93,22 +92,4 @@ func (s *Store) DeleteRepeaterTab(id int64) error {
 		}
 		return nil
 	})
-}
-
-// repeaterTabExists checks if a tab with the given host+port+request already exists.
-func (s *Store) repeaterTabByID(id int64) (*RepeaterTab, error) {
-	var tab RepeaterTab
-	var tlsFlag int
-	err := s.db.QueryRow(`
-		SELECT id, name, host, port, tls, raw_request, COALESCE(last_response, ''), position
-		FROM repeater_tabs WHERE id = ?`, id,
-	).Scan(&tab.ID, &tab.Name, &tab.Host, &tab.Port, &tlsFlag, &tab.RawRequest, &tab.LastResponse, &tab.Position)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	tab.TLS = tlsFlag == 1
-	return &tab, nil
 }

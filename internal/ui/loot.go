@@ -288,8 +288,8 @@ func (l *lootTab) exportMarkdown() {
 		}
 		if entry.HistoryID != nil {
 			if tx, err := l.projectStore.GetTransaction(*entry.HistoryID); err == nil {
-				ed.Request = FormatRequest(*tx)
-				ed.Response = FormatResponse(*tx)
+				ed.Request = FormatStoreRequest(*tx)
+				ed.Response = FormatStoreResponse(*tx)
 			}
 		} else {
 			ed.Request = entry.RawRequest
@@ -337,8 +337,8 @@ func (l *lootTab) showLinkedRequest(entry store.LootEntry) {
 			fyne.Do(func() {
 				l.showRequestResponseDialog(
 					fmt.Sprintf("Linked Request — %s %s", tx.Method, tx.URL),
-					FormatRequest(*tx),
-					FormatResponse(*tx),
+					FormatStoreRequest(*tx),
+					FormatStoreResponse(*tx),
 					tx.Host,
 					tx.TLS,
 				)
@@ -382,12 +382,12 @@ func (l *lootTab) showRequestResponseDialog(title, rawRequest, rawResponse, host
 			}
 		}
 		port, _ := strconv.Atoi(portStr)
-		path := PathOf(extractURLFromRaw(rawRequest))
+		path := PathOf(internalhttp.ExtractURL(rawRequest))
 		if len(path) > 20 {
 			path = path[:20] + "..."
 		}
 		l.repeater.AddTab(
-			fmt.Sprintf("%s %s", extractMethodFromRaw(rawRequest), path),
+			fmt.Sprintf("%s %s", internalhttp.ExtractMethod(rawRequest), path),
 			hostOnly, port, useTLS, rawRequest,
 		)
 		d.Hide()
@@ -396,22 +396,4 @@ func (l *lootTab) showRequestResponseDialog(title, rawRequest, rawResponse, host
 	closeOnEscape(l.win, d.Dismiss)
 	d.Show()
 	d.Resize(fyne.NewSize(900, 600))
-}
-
-// extractURLFromRaw extracts the path from the first line of a raw HTTP request.
-func extractURLFromRaw(rawRequest string) string {
-	parts := strings.Fields(strings.SplitN(rawRequest, "\n", 2)[0])
-	if len(parts) >= 2 {
-		return parts[1]
-	}
-	return "/"
-}
-
-// extractMethodFromRaw extracts the HTTP method from the first line of a raw HTTP request.
-func extractMethodFromRaw(rawRequest string) string {
-	parts := strings.Fields(strings.SplitN(rawRequest, "\n", 2)[0])
-	if len(parts) >= 1 {
-		return parts[0]
-	}
-	return "GET"
 }

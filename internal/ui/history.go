@@ -570,8 +570,8 @@ func (h *historyTab) watchUpdates() {
 func (h *historyTab) showDetail(tx store.Transaction) {
 	tx.RespBody = TruncateBody(tx.RespBody)
 	tx.ReqBody = TruncateBody(tx.ReqBody)
-	h.reqLabel.SetText(FormatRequest(tx))
-	h.respLabel.SetText(FormatResponse(tx))
+	h.reqLabel.SetText(FormatStoreRequest(tx))
+	h.respLabel.SetText(FormatStoreResponse(tx))
 }
 
 // ── Context menu ──────────────────────────────────────────────────────────────
@@ -616,7 +616,7 @@ func (h *historyTab) contextMenuItems(tx store.Transaction) []widgets.ContextMen
 						return
 					}
 					fyne.Do(func() {
-						fyne.CurrentApp().Clipboard().SetContent(FormatRequest(*fullTx))
+						fyne.CurrentApp().Clipboard().SetContent(FormatStoreRequest(*fullTx))
 					})
 				}()
 			},
@@ -631,7 +631,7 @@ func (h *historyTab) contextMenuItems(tx store.Transaction) []widgets.ContextMen
 						return
 					}
 					fyne.Do(func() {
-						fyne.CurrentApp().Clipboard().SetContent(FormatResponse(*fullTx))
+						fyne.CurrentApp().Clipboard().SetContent(FormatStoreResponse(*fullTx))
 					})
 				}()
 			},
@@ -656,11 +656,11 @@ func (h *historyTab) sendToRepeater(tx store.Transaction) {
 	if len(path) > 20 {
 		path = path[:20] + "..."
 	}
-	h.repeater.AddTab(fmt.Sprintf("%s %s", tx.Method, path), host, port, tx.TLS, FormatRequest(tx))
+	h.repeater.AddTab(fmt.Sprintf("%s %s", tx.Method, path), host, port, tx.TLS, FormatStoreRequest(tx))
 }
 
 func (h *historyTab) sendToIntruder(tx store.Transaction) {
-	h.intruder.reqEditor.SetText(FormatRequest(tx))
+	h.intruder.reqEditor.SetText(FormatStoreRequest(tx))
 }
 
 func (h *historyTab) cellText(tx store.Transaction, col int) string {

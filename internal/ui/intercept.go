@@ -3,7 +3,6 @@ package ui
 import (
 	"bufio"
 	"bytes"
-	"fmt"
 	"net/http"
 
 	"fyne.io/fyne/v2"
@@ -11,6 +10,7 @@ import (
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
+	internalhttp "github.com/shiv/internal/http"
 	"github.com/shiv/internal/logger"
 	"github.com/shiv/internal/store"
 )
@@ -91,7 +91,7 @@ func (t *interceptTab) watchQueue() {
 func (t *interceptTab) showRequest(p *store.PendingRequest) {
 	t.pending = p
 	t.editor.Enable()
-	t.editor.SetText(formatRawRequest(p.Request, p.Body))
+	t.editor.SetText(internalhttp.FormatRequest(p.Request, p.Body))
 	t.forward.Enable()
 	t.drop.Enable()
 }
@@ -144,26 +144,6 @@ func (t *interceptTab) clearEditor() {
 	t.editor.Disable()
 	t.forward.Disable()
 	t.drop.Disable()
-}
-
-func formatRawRequest(req *http.Request, body []byte) string {
-	var builder bytes.Buffer
-	path := req.URL.RequestURI()
-	if path == "" {
-		path = "/"
-	}
-	fmt.Fprintf(&builder, "%s %s HTTP/1.1\r\n", req.Method, path)
-	fmt.Fprintf(&builder, "Host: %s\r\n", req.Host)
-	for headerKey, headerValues := range req.Header {
-		for _, headerValue := range headerValues {
-			fmt.Fprintf(&builder, "%s: %s\r\n", headerKey, headerValue)
-		}
-	}
-	builder.WriteString("\r\n")
-	if len(body) > 0 {
-		builder.Write(body)
-	}
-	return builder.String()
 }
 
 func parseRawRequest(raw string, original *http.Request) (*http.Request, []byte, error) {

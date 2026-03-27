@@ -2,6 +2,7 @@ package http
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/tls"
 	"fmt"
 	"io"
@@ -207,4 +208,42 @@ func buildRawResponse(resp *http.Response, body []byte) string {
 	b.WriteString("\r\n")
 	b.Write(body)
 	return b.String()
+}
+
+func FormatRequest(req *http.Request, body []byte) string {
+	var builder bytes.Buffer
+	path := req.URL.RequestURI()
+	if path == "" {
+		path = "/"
+	}
+	fmt.Fprintf(&builder, "%s %s HTTP/1.1\r\n", req.Method, path)
+	fmt.Fprintf(&builder, "Host: %s\r\n", req.Host)
+	for headerKey, headerValues := range req.Header {
+		for _, headerValue := range headerValues {
+			fmt.Fprintf(&builder, "%s: %s\r\n", headerKey, headerValue)
+		}
+	}
+	builder.WriteString("\r\n")
+	if len(body) > 0 {
+		builder.Write(body)
+	}
+	return builder.String()
+}
+
+// ExtractURL extracts the path from the first line of a raw HTTP request.
+func ExtractURL(rawRequest string) string {
+	parts := strings.Fields(strings.SplitN(rawRequest, "\n", 2)[0])
+	if len(parts) >= 2 {
+		return parts[1]
+	}
+	return "/"
+}
+
+// ExtractMethod extracts the HTTP method from the first line of a raw HTTP request.
+func ExtractMethod(rawRequest string) string {
+	parts := strings.Fields(strings.SplitN(rawRequest, "\n", 2)[0])
+	if len(parts) >= 1 {
+		return parts[0]
+	}
+	return "GET"
 }
