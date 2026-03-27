@@ -27,6 +27,7 @@ type RecentProject struct {
 
 func ShowLaunchScreen(app fyne.App, onSelect func(projectPath string, w fyne.Window)) {
 	launchWin := app.NewWindow("Shiv")
+	applyTheme(app)
 	launchWin.Resize(fyne.NewSize(560, 420))
 	launchWin.CenterOnScreen()
 	launchWin.SetFixedSize(true)

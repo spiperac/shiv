@@ -2,12 +2,16 @@ package ui
 
 import (
 	"fmt"
+	"io"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/storage"
 	"fyne.io/fyne/v2/widget"
 
 	"github.com/shiv/internal/cert"
@@ -33,10 +37,8 @@ func showSettingsDialog(fyneApp fyne.App, parentWin fyne.Window, proxyServer *pr
 
 	settingsWin = fyneApp.NewWindow("Settings")
 	settingsWin.SetContent(container.NewPadded(tabs))
-	settingsWin.Resize(fyne.NewSize(480, 380))
-	settingsWin.SetOnClosed(func() {
-		settingsWin = nil
-	})
+	settingsWin.Resize(fyne.NewSize(480, 420))
+	settingsWin.SetOnClosed(func() { settingsWin = nil })
 	closeOnEscape(settingsWin, settingsWin.Close)
 	settingsWin.Show()
 }
@@ -126,7 +128,6 @@ func buildProxyTab(fyneApp fyne.App, proxyServer *proxy.Proxy) fyne.CanvasObject
 			proxyStatus.SetText("Invalid port number.")
 			return
 		}
-
 		prefs.SetString(prefKeyProxyHost, proxyHost)
 		prefs.SetInt(prefKeyProxyPort, proxyPort)
 		prefs.SetBool(prefKeyProxyEnabled, enabledCheck.Checked)
@@ -162,20 +163,93 @@ func buildProxyTab(fyneApp fyne.App, proxyServer *proxy.Proxy) fyne.CanvasObject
 	)
 }
 
+// loadThemeByName loads a theme by name, checking embedded themes first then user themes on disk.
+func loadThemeByName(name, themesDir string) (*LoadedTheme, error) {
+	for _, embedded := range ScanEmbeddedThemes() {
+		if embedded == name {
+			return LoadEmbeddedTheme(name)
+		}
+	}
+	return LoadTheme(filepath.Join(themesDir, name+".toml"))
+}
+
 func buildAppearanceTab(fyneApp fyne.App, keybinds *Keybinds) fyne.CanvasObject {
 	prefs := fyneApp.Preferences()
+	themesDir := ThemesDir(fyneApp.Storage().RootURI().Path())
 
-	themeSelect := widget.NewSelect([]string{"Dark", "Light"}, func(selected string) {
-		isDark := selected == "Dark"
-		prefs.SetBool(prefKeyDarkTheme, isDark)
-		fyneApp.Settings().SetTheme(NewVagueTheme(isDark))
-	})
-	if prefs.BoolWithFallback(prefKeyDarkTheme, defaultDarkTheme) {
-		themeSelect.SetSelected("Dark")
+	themeStatus := widget.NewLabel("")
+	themeStatus.Importance = widget.LowImportance
+
+	themeSelect := widget.NewSelect(ScanAllThemes(themesDir), nil)
+	if saved := prefs.String(prefKeyUserTheme); saved != "" {
+		themeSelect.SetSelected(saved)
 	} else {
-		themeSelect.SetSelected("Light")
+		themeSelect.SetSelected(ThemeDefaultOption)
 	}
 
+	variantSelect := widget.NewSelect([]string{"Dark", "Light"}, func(selected string) {
+		prefs.SetBool(prefKeyDarkTheme, selected == "Dark")
+		applyTheme(fyneApp)
+	})
+	if prefs.BoolWithFallback(prefKeyDarkTheme, defaultDarkTheme) {
+		variantSelect.SetSelected("Dark")
+	} else {
+		variantSelect.SetSelected("Light")
+	}
+	if lt := loadActiveTheme(fyneApp); lt != nil && !lt.HasBoth {
+		variantSelect.Hide()
+	}
+
+	applyBtn := widget.NewButton("Apply Theme", func() {
+		selected := themeSelect.Selected
+		if selected != ThemeDefaultOption {
+			if _, err := loadThemeByName(selected, themesDir); err != nil {
+				themeStatus.SetText("Invalid theme: " + err.Error())
+				logger.Error("settings: load theme %s: %v", selected, err)
+				return
+			}
+			prefs.SetString(prefKeyUserTheme, selected)
+		} else {
+			prefs.SetString(prefKeyUserTheme, "")
+		}
+		applyTheme(fyneApp)
+		if lt := loadActiveTheme(fyneApp); lt != nil && !lt.HasBoth {
+			variantSelect.Hide()
+		} else {
+			variantSelect.Show()
+		}
+		themeStatus.SetText("Applied. Restart to update the dark/light toggle visibility.")
+	})
+
+	addThemeBtn := widget.NewButtonWithIcon("Add Theme", AppIcon("save"), func() {
+		d := dialog.NewFileOpen(func(rc fyne.URIReadCloser, err error) {
+			if err != nil || rc == nil {
+				return
+			}
+			defer rc.Close()
+			data, err := io.ReadAll(rc)
+			if err != nil {
+				themeStatus.SetText("Failed to read file: " + err.Error())
+				return
+			}
+			dest := filepath.Join(themesDir, filepath.Base(rc.URI().Path()))
+			if err := os.WriteFile(dest, data, 0644); err != nil {
+				themeStatus.SetText("Failed to save theme: " + err.Error())
+				return
+			}
+			themeStatus.SetText("Theme added: " + filepath.Base(dest))
+			themeSelect.Options = ScanAllThemes(themesDir)
+			themeSelect.Refresh()
+		}, settingsWin)
+		d.SetFilter(storage.NewExtensionFileFilter([]string{".toml"}))
+		d.Show()
+	})
+
+	themeDirLabel := widget.NewLabel("User themes: " + themesDir)
+	themeDirLabel.Wrapping = fyne.TextWrapBreak
+	themeDirLabel.Importance = widget.LowImportance
+
+	// ── Shortcuts ─────────────────────────────────────────────────────────────
 	sendKeyEntry := widget.NewEntry()
 	sendKeyEntry.SetText(prefs.StringWithFallback(prefKeySendRequest, string(defaultKeySendRequest)))
 
@@ -185,21 +259,12 @@ func buildAppearanceTab(fyneApp fyne.App, keybinds *Keybinds) fyne.CanvasObject 
 	toRepeaterKeyEntry := widget.NewEntry()
 	toRepeaterKeyEntry.SetText(prefs.StringWithFallback(prefKeyToRepeater, string(defaultKeyToRepeater)))
 
-	sendKeyEntry.OnChanged = func(text string) {
-		if len(text) > 0 {
-			sendKeyEntry.SetText(strings.ToUpper(string([]rune(text)[0])))
-		}
-	}
-
-	closeTabKeyEntry.OnChanged = func(text string) {
-		if len(text) > 0 {
-			closeTabKeyEntry.SetText(strings.ToUpper(string([]rune(text)[0])))
-		}
-	}
-
-	toRepeaterKeyEntry.OnChanged = func(text string) {
-		if len(text) > 0 {
-			toRepeaterKeyEntry.SetText(strings.ToUpper(string([]rune(text)[0])))
+	for _, e := range []*widget.Entry{sendKeyEntry, closeTabKeyEntry, toRepeaterKeyEntry} {
+		entry := e
+		entry.OnChanged = func(text string) {
+			if len(text) > 0 {
+				entry.SetText(strings.ToUpper(string([]rune(text)[0])))
+			}
 		}
 	}
 
@@ -219,8 +284,13 @@ func buildAppearanceTab(fyneApp fyne.App, keybinds *Keybinds) fyne.CanvasObject 
 	return container.NewVBox(
 		newBoldLabel("Appearance"),
 		widget.NewForm(
+			widget.NewFormItem("Variant", variantSelect),
 			widget.NewFormItem("Theme", themeSelect),
 		),
+		applyBtn,
+		addThemeBtn,
+		themeStatus,
+		themeDirLabel,
 		widget.NewSeparator(),
 		newBoldLabel("Shortcuts"),
 		widget.NewLabel("Single letter keys always, Ctrl modifier always applied (eg. Send is Ctrl + s)."),
@@ -240,7 +310,6 @@ func buildBrowserTab(fyneApp fyne.App, win fyne.Window) fyne.CanvasObject {
 	statusLabel.Wrapping = fyne.TextWrapBreak
 
 	browsers := DetectBrowsers()
-
 	names := make([]string, len(browsers))
 	for i, b := range browsers {
 		names[i] = b.Name
@@ -253,7 +322,6 @@ func buildBrowserTab(fyneApp fyne.App, win fyne.Window) fyne.CanvasObject {
 		browserSelect.Disable()
 	} else {
 		browserSelect = widget.NewSelect(names, nil)
-		// Pre-select saved default if it matches a detected browser.
 		savedPath := prefs.String(prefKeyDefaultBrowser)
 		for _, b := range browsers {
 			if b.Path == savedPath {
@@ -292,9 +360,8 @@ func buildBrowserTab(fyneApp fyne.App, win fyne.Window) fyne.CanvasObject {
 		if len(browsers) == 0 {
 			return
 		}
-		sel := browserSelect.Selected
 		for _, b := range browsers {
-			if b.Name == sel {
+			if b.Name == browserSelect.Selected {
 				prefs.SetString(prefKeyDefaultBrowser, b.Path)
 				statusLabel.SetText("Default browser saved: " + b.Name)
 				return
@@ -304,9 +371,8 @@ func buildBrowserTab(fyneApp fyne.App, win fyne.Window) fyne.CanvasObject {
 	saveBtn.Importance = widget.HighImportance
 
 	clearProfileBtn := widget.NewButton("Clear Browser Profile", func() {
-		sel := browserSelect.Selected
 		for _, b := range browsers {
-			if b.Name == sel {
+			if b.Name == browserSelect.Selected {
 				if err := ClearBrowserProfile(fyneApp, b.Path); err != nil {
 					statusLabel.SetText("Error: " + err.Error())
 				} else {
@@ -328,7 +394,6 @@ func buildBrowserTab(fyneApp fyne.App, win fyne.Window) fyne.CanvasObject {
 	)
 }
 
-// newBrowserPickerContent returns a simple select widget for the one-time picker dialog.
 func newBrowserPickerContent(names []string, onChanged func(string)) fyne.CanvasObject {
 	sel := widget.NewSelect(names, onChanged)
 	if len(names) > 0 {

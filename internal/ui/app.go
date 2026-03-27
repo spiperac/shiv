@@ -2,7 +2,6 @@ package ui
 
 import (
 	"fmt"
-
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
@@ -21,6 +20,7 @@ const (
 	prefKeyProxyHost    = "proxy_host"
 	prefKeyProxyPort    = "proxy_port"
 	prefKeyProxyEnabled = "proxy_enabled"
+	prefKeyUserTheme    = "user_theme"
 
 	defaultDarkTheme    = true
 	defaultProxyHost    = "127.0.0.1"
@@ -31,6 +31,28 @@ const (
 var proxyStatusBinding = binding.NewString()
 var proxyRunningBinding = binding.NewBool()
 
+// loadActiveTheme reads the user theme from prefs and loads it.
+// Returns nil if no user theme is set or loading fails (falls back to default).
+func loadActiveTheme(fyneApp fyne.App) *LoadedTheme {
+	name := fyneApp.Preferences().String(prefKeyUserTheme)
+	if name == "" {
+		return nil
+	}
+	dir := ThemesDir(fyneApp.Storage().RootURI().Path())
+	lt, err := loadThemeByName(name, dir)
+	if err != nil {
+		return nil
+	}
+	return lt
+}
+
+// applyTheme reads current dark/light and user theme prefs and applies the theme.
+// Call this from anywhere — toggle, settings, startup. No shared mutable state.
+func applyTheme(fyneApp fyne.App) {
+	isDark := fyneApp.Preferences().BoolWithFallback(prefKeyDarkTheme, defaultDarkTheme)
+	fyneApp.Settings().SetTheme(NewVagueThemeWithLoaded(isDark, loadActiveTheme(fyneApp)))
+}
+
 func ShowMainWindow(fyneApp fyne.App, projectStore *store.Store, proxyServer *proxy.Proxy, launchWin fyne.Window) {
 	prefs := fyneApp.Preferences()
 
@@ -38,17 +60,20 @@ func ShowMainWindow(fyneApp fyne.App, projectStore *store.Store, proxyServer *pr
 	mainWin.Resize(fyne.NewSize(1280, 800))
 	mainWin.SetMaster()
 
-	isDark := prefs.BoolWithFallback(prefKeyDarkTheme, defaultDarkTheme)
-	fyneApp.Settings().SetTheme(NewVagueTheme(isDark))
+	applyTheme(fyneApp)
 
-	toggleThemeBtn := widget.NewButtonWithIcon("", theme.ColorChromaticIcon(), nil)
-	toggleThemeBtn.OnTapped = func() {
-		isDark = !isDark
-		fyneApp.Settings().SetTheme(NewVagueTheme(isDark))
+	toggleThemeBtn := widget.NewButtonWithIcon("", theme.ColorChromaticIcon(), func() {
+		isDark := !prefs.BoolWithFallback(prefKeyDarkTheme, defaultDarkTheme)
 		prefs.SetBool(prefKeyDarkTheme, isDark)
+		applyTheme(fyneApp)
+	})
+
+	// Hide toggle if active user theme only has one variant.
+	if lt := loadActiveTheme(fyneApp); lt != nil && !lt.HasBoth {
+		toggleThemeBtn.Hide()
 	}
 
-	settingsBtn := widget.NewButtonWithIcon("", AppIcon("settings"), nil)
+	settingsBtn := widget.NewButtonWithIcon("", AppIcon("toolbox"), nil)
 
 	browserBtn := widget.NewButtonWithIcon("", AppIcon("web"), func() {
 		launchDefaultBrowser(fyneApp, mainWin)

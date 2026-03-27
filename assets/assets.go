@@ -1,9 +1,15 @@
 package assets
 
-import _ "embed"
+import (
+	"embed"
+	_ "embed"
+)
 
 //go:embed logo.png
 var Logo []byte
+
+//go:embed themes/*.toml
+var Themes embed.FS
 
 //go:embed icons/delete.png
 var IconDelete []byte
@@ -37,6 +43,9 @@ var IconScope []byte
 
 //go:embed icons/settings.png
 var IconSettings []byte
+
+//go:embed icons/toolbox.png
+var IconToolbox []byte
 
 //go:embed icons/on-button.png
 var IconOnButton []byte
