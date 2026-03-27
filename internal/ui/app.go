@@ -28,6 +28,9 @@ const (
 	defaultProxyEnabled = true
 )
 
+// Package-level bindings shared between app.go and settings.go.
+// Both files are in the same package so this is safe — there is only
+// ever one app instance in a desktop process.
 var proxyStatusBinding = binding.NewString()
 var proxyRunningBinding = binding.NewBool()
 
@@ -51,6 +54,20 @@ func loadActiveTheme(fyneApp fyne.App) *LoadedTheme {
 func applyTheme(fyneApp fyne.App) {
 	isDark := fyneApp.Preferences().BoolWithFallback(prefKeyDarkTheme, defaultDarkTheme)
 	fyneApp.Settings().SetTheme(NewVagueThemeWithLoaded(isDark, loadActiveTheme(fyneApp)))
+}
+
+// setProxyStatus updates both package-level bindings and persists the running
+// state to prefs. Must be called on the Fyne main goroutine.
+func setProxyStatus(prefs fyne.Preferences, running bool) {
+	proxyHost := prefs.StringWithFallback(prefKeyProxyHost, defaultProxyHost)
+	proxyPort := prefs.IntWithFallback(prefKeyProxyPort, defaultProxyPort)
+	prefs.SetBool(prefKeyProxyEnabled, running)
+	_ = proxyRunningBinding.Set(running)
+	if running {
+		_ = proxyStatusBinding.Set(fmt.Sprintf("Proxy: running on %s:%d", proxyHost, proxyPort))
+	} else {
+		_ = proxyStatusBinding.Set("Proxy: stopped")
+	}
 }
 
 func ShowMainWindow(fyneApp fyne.App, projectStore *store.Store, proxyServer *proxy.Proxy, launchWin fyne.Window) {
@@ -94,37 +111,24 @@ func ShowMainWindow(fyneApp fyne.App, projectStore *store.Store, proxyServer *pr
 	proxyToggleBtn.OnTapped = func() {
 		isRunning, _ := proxyRunningBinding.Get()
 		isRunning = !isRunning
+
 		if isRunning {
 			proxyHost := prefs.StringWithFallback(prefKeyProxyHost, defaultProxyHost)
 			proxyPort := prefs.IntWithFallback(prefKeyProxyPort, defaultProxyPort)
 			addr := fmt.Sprintf("%s:%d", proxyHost, proxyPort)
 			if err := proxyServer.Restart(addr); err != nil {
+				// Restart failed synchronously — don't mark as running.
 				isRunning = false
 			}
 		} else {
 			proxyServer.Stop()
 		}
-		prefs.SetBool(prefKeyProxyEnabled, isRunning)
-		proxyRunningBinding.Set(isRunning)
-		proxyHost := prefs.StringWithFallback(prefKeyProxyHost, defaultProxyHost)
-		proxyPort := prefs.IntWithFallback(prefKeyProxyPort, defaultProxyPort)
-		if isRunning {
-			proxyStatusBinding.Set(fmt.Sprintf("Proxy: running on %s:%d", proxyHost, proxyPort))
-		} else {
-			proxyStatusBinding.Set("Proxy: stopped")
-		}
+
+		setProxyStatus(prefs, isRunning)
 	}
 
-	proxyHost := prefs.StringWithFallback(prefKeyProxyHost, defaultProxyHost)
-	proxyPort := prefs.IntWithFallback(prefKeyProxyPort, defaultProxyPort)
-	proxyEnabled := prefs.BoolWithFallback(prefKeyProxyEnabled, defaultProxyEnabled)
-
-	if proxyEnabled {
-		proxyStatusBinding.Set(fmt.Sprintf("Proxy: running on %s:%d", proxyHost, proxyPort))
-	} else {
-		proxyStatusBinding.Set("Proxy: stopped")
-	}
-	proxyRunningBinding.Set(proxyEnabled)
+	// Initialise status from persisted prefs.
+	setProxyStatus(prefs, prefs.BoolWithFallback(prefKeyProxyEnabled, defaultProxyEnabled))
 
 	proxyLabel := widget.NewLabelWithData(proxyStatusBinding)
 	proxyLabel.Importance = widget.LowImportance

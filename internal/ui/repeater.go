@@ -45,6 +45,7 @@ func (r *repeaterTab) closeTab(closed *container.TabItem) {
 		delete(r.tabIDs, closed)
 	}
 	delete(r.sendFns, closed)
+	delete(r.loadFns, closed)
 }
 
 func (r *repeaterTab) build() fyne.CanvasObject {
@@ -124,14 +125,23 @@ func (r *repeaterTab) buildTabItem(tab store.RepeaterTab) *container.TabItem {
 	sendBtn := widget.NewButtonWithIcon("Send", theme.MailSendIcon(), nil)
 	sendBtn.Importance = widget.HighImportance
 
+	// lastRawRequest and lastRawResponse are only accessed on the Fyne main
+	// goroutine (inside fyne.Do callbacks and UI event handlers), so no mutex
+	// is needed. cookieJar is read by the send goroutine before it starts and
+	// written back inside fyne.Do before sendBtn.Enable() — the Enable() acts
+	// as a happens-before barrier, so access is safe.
 	var lastRawRequest string
 	var lastRawResponse string
+	var lastRespBody []byte
 	cookieJar := make(map[string]string)
 
 	inspectBtn := widget.NewButtonWithIcon("Inspector", AppIcon("inspector"), func() {
+		// Use the already-split headers and body — do NOT pass the full raw
+		// response string as the body.
+		respHeaders := internalhttp.ParseRawHeaders(lastRawResponse)
 		lastTx := store.Transaction{
-			RespHeaders: internalhttp.ParseRawHeaders(lastRawResponse),
-			RespBody:    []byte(lastRawResponse),
+			RespHeaders: respHeaders,
+			RespBody:    lastRespBody,
 		}
 		showInspectorDialog(lastTx, r.win)
 	})
@@ -172,17 +182,29 @@ func (r *repeaterTab) buildTabItem(tab store.RepeaterTab) *container.TabItem {
 				if err != nil {
 					respLabel.SetText("Error: " + err.Error())
 					logger.Error("repeater: send: %v", err)
-				} else {
-					respLabel.SetText(result.Raw)
-					for _, c := range result.Cookies {
-						cookieJar[c.Name] = c.Value
-					}
-					lastRawRequest = rawReq
-					lastRawResponse = result.Raw
-					inspectBtn.Enable()
-					sendToLootBtn.Enable()
+					// Don't update last request/response on error.
+					return
 				}
-				if saveErr := r.projectStore.UpdateRepeaterTab(tabID, rawReq, respLabel.GetText()); saveErr != nil {
+
+				respLabel.SetText(result.Raw)
+
+				// Update cookie jar with any new cookies from the response.
+				for _, c := range result.Cookies {
+					cookieJar[c.Name] = c.Value
+				}
+
+				// Store request and split response for inspector/loot use.
+				lastRawRequest = rawReq
+				lastRawResponse = result.Raw
+				lastRespBody = result.Body // already decompressed by SendRaw
+
+				// Update tab name to reflect the current request line.
+				r.updateTabName(rawReq, tabID)
+
+				inspectBtn.Enable()
+				sendToLootBtn.Enable()
+
+				if saveErr := r.projectStore.UpdateRepeaterTab(tabID, rawReq, result.Raw); saveErr != nil {
 					logger.Error("repeater: update tab: %v", saveErr)
 				}
 			})
@@ -227,7 +249,38 @@ func (r *repeaterTab) buildTabItem(tab store.RepeaterTab) *container.TabItem {
 
 	r.sendFns[tabItem] = doSend
 	r.tabIDs[tabItem] = tabID
+	// Lazy-load: populate the editor only when the tab is first selected,
+	// so opening a project with many tabs doesn't block startup.
 	r.loadFns[tabItem] = func() { reqEditor.SetText(tab.RawRequest) }
 
 	return tabItem
+}
+
+// updateTabName updates the DocTab label to reflect the current request's
+// method and path, matching Burp's auto-rename behaviour on send.
+func (r *repeaterTab) updateTabName(rawReq string, tabID int64) {
+	firstLine := strings.SplitN(rawReq, "\n", 2)[0]
+	parts := strings.Fields(firstLine)
+	if len(parts) < 2 {
+		return
+	}
+	path := parts[1]
+	if len(path) > 24 {
+		path = path[:24] + "..."
+	}
+	name := fmt.Sprintf("%s %s", parts[0], path)
+
+	// Find the tab item for this tabID and update its text.
+	for item, id := range r.tabIDs {
+		if id == tabID {
+			item.Text = name
+			r.tabs.Refresh()
+			break
+		}
+	}
+
+	// Persist the new name.
+	if err := r.projectStore.RenameRepeaterTab(tabID, name); err != nil {
+		logger.Error("repeater: rename tab: %v", err)
+	}
 }

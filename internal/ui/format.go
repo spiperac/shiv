@@ -39,18 +39,19 @@ func PrettyJSON(body []byte) []byte {
 	return buf.Bytes()
 }
 
-// FormatStoreRequest serialises a Transaction into a raw HTTP request string
+// FormatStoreRequest serialises a Transaction into a raw HTTP/1.1 request string
 // suitable for display in the UI or sending via Repeater/Intruder.
+//
+// The protocol is always written as HTTP/1.1 regardless of what was captured —
+// HTTP/2 is a transport concern and cannot be sent as raw text over a socket.
 func FormatStoreRequest(tx store.Transaction) string {
 	proto := tx.Proto
 	if proto == "" {
 		proto = "HTTP/1.1"
 	}
 
-	host := tx.Host
-	if i := strings.LastIndex(host, ":"); i >= 0 {
-		host = host[:i]
-	}
+	// Use NormalizeHost to strip default ports correctly (handles IPv6, non-standard ports).
+	host := internalhttp.NormalizeHost(tx.Host, tx.TLS)
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s %s %s\r\n", tx.Method, PathOf(tx.URL), proto)
@@ -58,6 +59,10 @@ func FormatStoreRequest(tx store.Transaction) string {
 
 	keys := sortedKeys(tx.ReqHeaders)
 	for _, k := range keys {
+		// Skip Host — we already wrote a canonical one above.
+		if strings.EqualFold(k, "host") {
+			continue
+		}
 		for _, v := range tx.ReqHeaders[k] {
 			fmt.Fprintf(&b, "%s: %s\r\n", k, v)
 		}
@@ -71,12 +76,12 @@ func FormatStoreRequest(tx store.Transaction) string {
 
 // FormatStoreResponse serialises a Transaction into a raw HTTP response string
 // suitable for display in the UI.
+//
+// The store already holds decompressed body bytes — we must NOT decompress again.
 func FormatStoreResponse(tx store.Transaction) string {
 	var b strings.Builder
-	proto := tx.Proto
-	if proto == "" {
-		proto = "HTTP/1.1"
-	}
+	// Always render as HTTP/1.1; H2 pseudo-headers are not meaningful in raw text.
+	const proto = "HTTP/1.1"
 	fmt.Fprintf(&b, "%s %d\r\n", proto, tx.StatusCode)
 
 	keys := sortedKeys(tx.RespHeaders)
@@ -88,7 +93,9 @@ func FormatStoreResponse(tx store.Transaction) string {
 	b.WriteString("\r\n")
 
 	if len(tx.RespBody) > 0 {
-		body := internalhttp.Decompress(tx.RespHeaders, tx.RespBody)
+		// tx.RespBody is already decompressed by the proxy before storage.
+		// Do NOT call Decompress here — the body is plain bytes.
+		body := tx.RespBody
 		ct := tx.RespHeaders.Get("Content-Type")
 		if strings.Contains(ct, "application/json") {
 			b.Write(PrettyJSON(body))
@@ -104,7 +111,11 @@ func TruncateBody(body []byte) []byte {
 	if len(body) <= MaxDisplayBytes {
 		return body
 	}
-	return append(body[:MaxDisplayBytes], []byte("\n... truncated")...)
+	notice := []byte("\n... truncated")
+	out := make([]byte, MaxDisplayBytes+len(notice))
+	copy(out, body[:MaxDisplayBytes])
+	copy(out[MaxDisplayBytes:], notice)
+	return out
 }
 
 func sortedKeys(h map[string][]string) []string {

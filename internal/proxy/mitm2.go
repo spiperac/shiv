@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -21,11 +22,21 @@ import (
 const (
 	h2UpstreamDialTimeout   = 10 * time.Second
 	h2UpstreamHeaderTimeout = 30 * time.Second
-	h2StreamRequestTimeout  = 60 * time.Second
-	h2MaxConcurrentStreams  = 250
+	// h2StreamRequestTimeout is a per-stream deadline, not a connection-level
+	// timeout. Using a context timeout per stream instead of a client-level
+	// Timeout means a single slow stream cannot kill the entire H2 connection.
+	h2StreamRequestTimeout = 60 * time.Second
+	// h2MaxConcurrentStreams matches the HTTP/2 spec default (RFC 7540 §6.5.2).
+	h2MaxConcurrentStreams = 250
 )
 
 func (p *Proxy) handleConnectH2(browserTLS *tls.Conn, connectReq *http.Request, bareHost string) {
+	defer recoverPanic("handleConnectH2 " + bareHost)
+
+	// Use the port-aware host from the original CONNECT request for upstream
+	// dialling so non-443 HTTPS ports are preserved.
+	upstreamHost := connectReq.Host
+
 	upstreamTransport := &http.Transport{
 		DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			conn, err := (&net.Dialer{Timeout: h2UpstreamDialTimeout}).DialContext(ctx, "tcp", addr)
@@ -72,6 +83,8 @@ func (p *Proxy) handleConnectH2(browserTLS *tls.Conn, connectReq *http.Request, 
 	}
 	defer upstreamTransport.CloseIdleConnections()
 
+	// No client-level Timeout — that would kill the entire H2 connection on
+	// any slow stream. Per-stream timeouts are applied via request contexts.
 	upstreamClient := &http.Client{
 		Transport: upstreamTransport,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
@@ -80,8 +93,10 @@ func (p *Proxy) handleConnectH2(browserTLS *tls.Conn, connectReq *http.Request, 
 	}
 
 	streamHandler := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		defer recoverPanic("h2 stream " + bareHost)
+
 		req.URL.Scheme = "https"
-		req.URL.Host = bareHost
+		req.URL.Host = upstreamHost
 
 		reqBody, err := io.ReadAll(io.LimitReader(req.Body, maxBodySize))
 		if err != nil {
@@ -95,6 +110,7 @@ func (p *Proxy) handleConnectH2(browserTLS *tls.Conn, connectReq *http.Request, 
 
 		interceptedReq, reqBody, shouldForward := p.store.Intercept.Hold(req, reqBody)
 		if !shouldForward {
+			// Stream is dropped by intercept rules; the H2 connection stays alive.
 			http.Error(w, "request dropped", http.StatusForbidden)
 			return
 		}
@@ -110,11 +126,20 @@ func (p *Proxy) handleConnectH2(browserTLS *tls.Conn, connectReq *http.Request, 
 		}
 		outReq.Header = interceptedReq.Header.Clone()
 		outReq.Host = internalhttp.NormalizeHost(bareHost, true)
+		// Strip H2-illegal headers before forwarding.
+		outReq.Header.Del("Transfer-Encoding")
 		internalhttp.StripRequestCacheHeaders(outReq.Header)
 
 		resp, err := upstreamClient.Do(outReq)
 		if err != nil {
-			logger.Error("mitm/h2: upstream request for %s: %v", bareHost, err)
+			// context.Canceled means the browser cancelled the stream (RST_STREAM)
+			// or we hit our per-stream deadline. This is normal browser behaviour
+			// (prefetch, autocomplete, navigation away) — log at Debug, not Error.
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				logger.Debug("mitm/h2: stream cancelled/timed out for %s: %v", bareHost, err)
+			} else {
+				logger.Error("mitm/h2: upstream request for %s: %v", bareHost, err)
+			}
 			http.Error(w, "bad gateway", http.StatusBadGateway)
 			return
 		}
@@ -122,7 +147,11 @@ func (p *Proxy) handleConnectH2(browserTLS *tls.Conn, connectReq *http.Request, 
 		var respBuf bytes.Buffer
 		reader := io.TeeReader(io.LimitReader(resp.Body, maxBodySize), &respBuf)
 
+		// Strip Transfer-Encoding — illegal in HTTP/2 responses (RFC 7540 §8.1.2.2).
+		// Strip caching headers so the browser always fetches fresh content.
+		resp.Header.Del("Transfer-Encoding")
 		internalhttp.StripResponseCacheHeaders(resp.Header)
+
 		for k, vals := range resp.Header {
 			for _, v := range vals {
 				w.Header().Add(k, v)
@@ -132,10 +161,18 @@ func (p *Proxy) handleConnectH2(browserTLS *tls.Conn, connectReq *http.Request, 
 
 		if _, err := io.Copy(w, reader); err != nil {
 			logger.Debug("mitm/h2: write response to browser for %s: %v", bareHost, err)
+			// Drain whatever remains into respBuf so the log body is as complete
+			// as possible even if the browser disconnected mid-stream.
+			_, _ = io.Copy(&respBuf, resp.Body)
 		}
 
 		respBody := respBuf.Bytes()
 		resp.Body.Close()
+
+		if len(respBody) >= int(maxBodySize) {
+			logger.Debug("mitm/h2: response body truncated at %d bytes for %s %s",
+				maxBodySize, interceptedReq.Method, interceptedReq.URL)
+		}
 
 		elapsed := time.Since(start).Milliseconds()
 		logger.Info("%s %s %d %db %dms (h2)", interceptedReq.Method, interceptedReq.URL, resp.StatusCode, len(respBody), elapsed)
@@ -167,6 +204,9 @@ func (p *Proxy) handleConnectH2(browserTLS *tls.Conn, connectReq *http.Request, 
 	h2srv := &http2.Server{
 		MaxConcurrentStreams: h2MaxConcurrentStreams,
 	}
+	// ServeConn blocks until the browser closes the underlying TLS connection.
+	// It handles all stream multiplexing internally. No idle timer is needed —
+	// the connection lifetime is naturally tied to browserTLS.
 	h2srv.ServeConn(browserTLS, &http2.ServeConnOpts{
 		Handler: streamHandler,
 	})

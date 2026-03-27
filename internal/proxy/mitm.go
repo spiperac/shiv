@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -82,9 +83,11 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	}
 	defer transport.CloseIdleConnections()
 
+	// No client-level Timeout — a per-connection timeout would terminate the
+	// entire keep-alive session after the first long request. Individual
+	// requests are bounded by ResponseHeaderTimeout + read deadlines instead.
 	upstreamClient := &http.Client{
 		Transport: transport,
-		Timeout:   60 * time.Second,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
@@ -108,6 +111,7 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		req.Body.Close()
 
 		req.URL.Scheme = "https"
+		// Preserve r.Host (with port) so non-443 HTTPS targets work correctly.
 		req.URL.Host = r.Host
 
 		interceptedReq, reqBody, shouldForward := p.store.Intercept.Hold(req, reqBody)
@@ -139,7 +143,14 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 
 		resp, err := upstreamClient.Do(outReq)
 		if err != nil {
-			logger.Error("mitm: upstream request for %s: %v", bareHost, err)
+			// Distinguish client-cancelled requests (normal) from real upstream
+			// failures. Context cancellation here means the browser closed the
+			// connection before we could forward — log at Debug.
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				logger.Debug("mitm: stream cancelled for %s: %v", bareHost, err)
+			} else {
+				logger.Error("mitm: upstream request for %s: %v", bareHost, err)
+			}
 			return
 		}
 
@@ -155,6 +166,11 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		}
 
 		respBody := respBuf.Bytes()
+
+		if len(respBody) >= int(maxBodySize) {
+			logger.Debug("mitm: response body truncated at %d bytes for %s %s",
+				maxBodySize, interceptedReq.Method, interceptedReq.URL)
+		}
 
 		elapsed := time.Since(start).Milliseconds()
 		logger.Info("%s %s %d %db %dms", interceptedReq.Method, interceptedReq.URL, resp.StatusCode, len(respBody), elapsed)
