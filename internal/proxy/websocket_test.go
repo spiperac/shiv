@@ -746,7 +746,7 @@ func TestMITM_WebSocket_RapidFireMessages(t *testing.T) {
 
 	// Send 100 messages without waiting for echo.
 	go func() {
-		for i := 0; i < n; i++ {
+		for range n {
 			if err := wsConn.WriteMessage(websocket.TextMessage, []byte("rapid")); err != nil {
 				return
 			}
@@ -756,7 +756,7 @@ func TestMITM_WebSocket_RapidFireMessages(t *testing.T) {
 
 	// Receive all 100 echoes.
 	wsConn.SetReadDeadline(time.Now().Add(10 * time.Second))
-	for i := 0; i < n; i++ {
+	for range n {
 		_, payload, err := wsConn.ReadMessage()
 		require.NoError(t, err)
 		assert.Equal(t, "rapid", string(payload))
