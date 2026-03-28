@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -23,6 +24,45 @@ type Transaction struct {
 	DurationMs  int64
 	TLS         bool
 	InScope     bool
+}
+
+// TransactionFilter holds filter criteria for paginated history queries.
+// Zero values mean "no filter" for that field.
+type TransactionFilter struct {
+	Search       string // matched against host + url + method + status (case-insensitive)
+	Host         string // exact host match (from site map selection)
+	PathPrefix   string // URL path prefix filter (from site map selection)
+	ShowOutScope bool   // if false, only in_scope=1 rows are returned
+}
+
+// PageSize is the number of rows returned per page.
+const PageSize = 100
+
+// SiteMapEntry is a minimal host+url pair used to build the site map at
+// startup. Only these two fields are needed — no headers, no bodies.
+type SiteMapEntry struct {
+	Host string
+	URL  string
+}
+
+// SiteMapEntries returns the host and url for every row in history.
+// Used once at startup to populate the site map with all historical
+// paths before the first page of transactions is displayed.
+func (s *Store) SiteMapEntries() ([]SiteMapEntry, error) {
+	rows, err := s.db.Query(`SELECT host, url FROM history ORDER BY id ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("store: site map entries: %w", err)
+	}
+	defer rows.Close()
+	var entries []SiteMapEntry
+	for rows.Next() {
+		var e SiteMapEntry
+		if err := rows.Scan(&e.Host, &e.URL); err != nil {
+			return nil, fmt.Errorf("store: scan site map entry: %w", err)
+		}
+		entries = append(entries, e)
+	}
+	return entries, rows.Err()
 }
 
 func (s *Store) GetTransaction(id uint64) (*Transaction, error) {
@@ -96,24 +136,68 @@ func (s *Store) Log(t Transaction) error {
 	})
 }
 
-// AllTransactions returns the most recent 500 transactions ordered by id descending.
-// Bodies are omitted for performance; use GetTransaction for the full row.
-func (s *Store) AllTransactions() ([]Transaction, error) {
-	rows, err := s.db.Query(`
+// TransactionsPage returns up to PageSize transactions with id < beforeID,
+// ordered by id descending (newest first), applying filter criteria.
+// Pass beforeID=0 to start from the newest row.
+// Bodies are omitted; use GetTransaction for the full row.
+func (s *Store) TransactionsPage(beforeID uint64, filter TransactionFilter) ([]Transaction, error) {
+	var conditions []string
+	var args []any
+
+	if beforeID > 0 {
+		conditions = append(conditions, "id < ?")
+		args = append(args, beforeID)
+	}
+
+	if !filter.ShowOutScope {
+		conditions = append(conditions, "in_scope = 1")
+	}
+
+	if filter.Host != "" {
+		conditions = append(conditions, "host = ?")
+		args = append(args, filter.Host)
+	}
+
+	if filter.PathPrefix != "" {
+		conditions = append(conditions, "(url LIKE ? OR url LIKE ? OR url LIKE ?)")
+		prefix := filter.PathPrefix
+		args = append(args,
+			"%"+prefix,
+			"%"+prefix+"?%",
+			"%"+prefix+"/%",
+		)
+	}
+
+	if filter.Search != "" {
+		terms := strings.Fields(strings.ToLower(filter.Search))
+		for _, term := range terms {
+			conditions = append(conditions, "(LOWER(host) LIKE ? OR LOWER(url) LIKE ? OR LOWER(method) LIKE ? OR CAST(status_code AS TEXT) LIKE ?)")
+			like := "%" + term + "%"
+			args = append(args, like, like, like, like)
+		}
+	}
+
+	query := `
 		SELECT id, timestamp, host, method, url, proto,
 		       req_headers, '' as req_body, status_code, resp_headers,
 		       '' as resp_body, duration_ms, tls, in_scope
-		FROM history
-		ORDER BY id DESC LIMIT 500`)
+		FROM history`
+
+	if len(conditions) > 0 {
+		query += " WHERE " + strings.Join(conditions, " AND ")
+	}
+	query += fmt.Sprintf(" ORDER BY id DESC LIMIT %d", PageSize)
+
+	rows, err := s.db.Query(query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("store: query history: %w", err)
+		return nil, fmt.Errorf("store: query history page: %w", err)
 	}
 	defer rows.Close()
 	return scanTransactions(rows)
 }
 
-// TransactionsSince returns all transactions with id > afterID, newest first,
-// capped at 200. Bodies are omitted for performance.
+// TransactionsSince returns transactions with id > afterID, newest first,
+// capped at 200. Bodies are omitted. Used by pollMissed.
 func (s *Store) TransactionsSince(afterID uint64) ([]Transaction, error) {
 	rows, err := s.db.Query(`
 		SELECT id, timestamp, host, method, url, proto,

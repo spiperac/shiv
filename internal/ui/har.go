@@ -11,39 +11,51 @@ import (
 	"github.com/shiv/internal/store"
 )
 
-// ExportHAR exports the current history to a HAR file, respecting the
-// current showOutScope state from the history tab.
-// Wire this to a button in history.go: h.exportHAR()
+// exportHAR exports all transactions matching the current filter to a HAR file.
+// It paginates through the DB so all rows are exported, not just the visible page.
 func (h *historyTab) exportHAR() {
-	h.mu.RLock()
-	rows := make([]store.Transaction, len(h.rows))
-	copy(rows, h.rows)
-	showOut := h.showOutScope.Checked
-	h.mu.RUnlock()
-
-	// Apply the same scope filter the table uses.
-	var txs []store.Transaction
-	for _, tx := range rows {
-		if !showOut && !tx.InScope {
-			continue
-		}
-		txs = append(txs, tx)
-	}
-
-	if len(txs) == 0 {
+	if len(h.displayed) == 0 {
 		dialog.ShowInformation("Export HAR", "No transactions to export.", h.win)
 		return
 	}
 
-	// Fetch full bodies for each transaction — history rows omit bodies
-	// for performance, same as the repeater send-to pattern.
+	f := h.currentFilter()
+
 	go func() {
-		full := make([]store.Transaction, 0, len(txs))
-		for _, tx := range txs {
+		// Paginate through all matching rows from DB.
+		var all []store.Transaction
+		var cursor uint64
+		for {
+			page, err := h.projectStore.TransactionsPage(cursor, f)
+			if err != nil {
+				fyne.Do(func() {
+					dialog.ShowError(fmt.Errorf("HAR export failed: %w", err), h.win)
+				})
+				return
+			}
+			if len(page) == 0 {
+				break
+			}
+			all = append(all, page...)
+			if len(page) < store.PageSize {
+				break
+			}
+			cursor = page[len(page)-1].ID
+		}
+
+		if len(all) == 0 {
+			fyne.Do(func() {
+				dialog.ShowInformation("Export HAR", "No transactions to export.", h.win)
+			})
+			return
+		}
+
+		// Fetch full bodies — page rows omit bodies for performance.
+		full := make([]store.Transaction, 0, len(all))
+		for _, tx := range all {
 			fullTx, err := h.projectStore.GetTransaction(tx.ID)
 			if err != nil {
 				logger.Error("har: get transaction %d: %v", tx.ID, err)
-				// Include the body-less version rather than silently dropping it.
 				full = append(full, tx)
 				continue
 			}

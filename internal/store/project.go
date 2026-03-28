@@ -135,6 +135,8 @@ CREATE INDEX IF NOT EXISTS idx_history_host      ON history(host);
 CREATE INDEX IF NOT EXISTS idx_history_timestamp ON history(timestamp);
 CREATE INDEX IF NOT EXISTS idx_history_scope     ON history(in_scope);
 CREATE INDEX IF NOT EXISTS idx_history_dedup ON history(method, host, url, status_code);
+CREATE INDEX IF NOT EXISTS idx_history_host_id   ON history(host, id DESC);
+CREATE INDEX IF NOT EXISTS idx_history_scope_id  ON history(in_scope, id DESC);
 
 CREATE TABLE IF NOT EXISTS repeater_tabs (
 	id            INTEGER PRIMARY KEY AUTOINCREMENT,

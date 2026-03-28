@@ -30,6 +30,9 @@ const (
 	dtPadX    float32 = 8  // horizontal cell padding
 	dtDivW    float32 = 6  // width of a column-divider hit area
 	dtScrollW float32 = 8  // width of the scrollbar track
+
+	// dtNearBottomThreshold is how many rows from the end triggers OnNearBottom.
+	dtNearBottomThreshold = 20
 )
 
 // DataTable is a virtualised, row-selectable table widget with resizable
@@ -50,14 +53,17 @@ type DataTable struct {
 	RowID     func(row int) int64                  // stable unique ID per row
 
 	// Interaction callbacks.
-	OnSelect  func(row int)
-	MenuItems func(row int) []ContextMenuItem // nil → no context menu
+	OnSelect     func(row int)
+	MenuItems    func(row int) []ContextMenuItem // nil → no context menu
+	OnNearBottom func()                          // fired when scrolled near the last row
 
 	colWidths    []float32
 	selectedID   int64
 	hasSelected  bool
 	scrollOffset int
 	scrollFrac   float32 // sub-row accumulator for smooth trackpad scrolling
+
+	nearBottomFired bool // debounce: only fire once per approach to the bottom
 
 	win        fyne.Window
 	rend       *dtRenderer
@@ -139,6 +145,21 @@ func (t *DataTable) Scrolled(ev *fyne.ScrollEvent) {
 		t.scrollOffset = maxOffset
 	}
 	t.Refresh()
+
+	// Fire OnNearBottom when the user scrolls within dtNearBottomThreshold rows
+	// of the end. Debounced: only fires once until the user scrolls back up.
+	if t.OnNearBottom != nil && totalRows > 0 {
+		rowsFromBottom := totalRows - (t.scrollOffset + visible)
+		if rowsFromBottom < dtNearBottomThreshold {
+			if !t.nearBottomFired {
+				t.nearBottomFired = true
+				t.OnNearBottom()
+			}
+		} else {
+			// Reset debounce when user scrolls back up far enough.
+			t.nearBottomFired = false
+		}
+	}
 }
 
 // CreateRenderer implements fyne.Widget.
@@ -732,10 +753,7 @@ func (d *colDivider) MouseIn(_ *desktop.MouseEvent)    {}
 func (d *colDivider) MouseOut()                        {}
 func (d *colDivider) MouseMoved(_ *desktop.MouseEvent) {}
 
-// Dragged resizes the column to the left of this divider. Dragging right
-// first consumes spare space to the right of all columns, then shrinks the
-// right neighbour. Dragging left shrinks this column and widens the right
-// neighbour. Neither column can go below its header-text minimum width.
+// Dragged resizes the column to the left of this divider.
 func (d *colDivider) Dragged(ev *fyne.DragEvent) {
 	if d.col >= len(d.table.colWidths) {
 		return
