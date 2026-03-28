@@ -114,6 +114,14 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		// Preserve r.Host (with port) so non-443 HTTPS targets work correctly.
 		req.URL.Host = r.Host
 
+		// Detect WebSocket upgrade before intercept. WebSocket connections are
+		// long-lived bidirectional streams — they cannot be intercepted the same
+		// way as regular HTTP requests. Hand off to the WebSocket handler which
+		// manages the entire session and returns when the connection closes.
+		if isWebSocketUpgrade(req) {
+			p.handleWebSocketTLS(browserTLS, req, bareHost, r.Host)
+			return
+		}
 		interceptedReq, reqBody, shouldForward := p.store.Intercept.Hold(req, reqBody)
 		if !shouldForward {
 			resp := &http.Response{

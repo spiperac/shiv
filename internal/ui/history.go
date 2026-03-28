@@ -235,31 +235,7 @@ func newHistoryTab(projectStore *store.Store, win fyne.Window, repeater *repeate
 }
 
 func (h *historyTab) buildSiteMapPane() fyne.CanvasObject {
-	addScopeBtn := widget.NewButtonWithIcon("", AppIcon("scope"), func() {
-		if h.selectedUID == "" {
-			return
-		}
-		host, _, ok := parseNodeID(h.selectedUID)
-		if !ok {
-			return
-		}
-		bareHost, _, err := net.SplitHostPort(host)
-		if err != nil {
-			bareHost = host
-		}
-		h.projectStore.AddScopeEntry(bareHost)
-		h.mu.Lock()
-		for i := range h.rows {
-			if h.rows[i].Host == host {
-				h.rows[i].InScope = true
-			}
-		}
-		h.mu.Unlock()
-		h.tree.Refresh()
-		h.applyFilter()
-	})
-
-	header := container.NewHBox(newBoldLabel("Site Map"), layout.NewSpacer(), addScopeBtn)
+	header := container.NewHBox(newBoldLabel("Site Map"), layout.NewSpacer(), h.scopeBtn)
 	return container.NewBorder(header, nil, nil, nil, h.tree)
 }
 
@@ -312,9 +288,12 @@ func (h *historyTab) build() fyne.CanvasObject {
 	exportHARBtn := widget.NewButtonWithIcon("Export HAR", AppIcon("document"), func() {
 		h.exportHAR()
 	})
+	wsBtn := widget.NewButtonWithIcon("WebSockets", AppIcon("web"), func() {
+		showWebSocketWindow(fyne.CurrentApp(), h.projectStore, h.win)
+	})
 
 	filterBar := container.NewBorder(nil, nil, nil,
-		container.NewHBox(h.showOutScope, h.scopeBtn, exportHARBtn, clearBtn),
+		container.NewHBox(h.showOutScope, exportHARBtn, wsBtn, clearBtn),
 		h.filterEntry,
 	)
 	h.tree = widget.NewTree(

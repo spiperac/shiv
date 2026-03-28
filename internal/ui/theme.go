@@ -322,6 +322,9 @@ func (t *vagueTheme) Size(name fyne.ThemeSizeName) float32 {
 	if name == theme.SizeNameInlineIcon {
 		return 28
 	}
+	if name == theme.SizeNameText {
+		return 13
+	}
 	return theme.DefaultTheme().Size(name)
 }
 

@@ -166,4 +166,28 @@ CREATE TABLE IF NOT EXISTS intruder_config (
 	raw_request      TEXT    DEFAULT '',
 	payloads         TEXT    DEFAULT ''
 );
+
+CREATE TABLE IF NOT EXISTS websocket_connections (
+	id         INTEGER PRIMARY KEY AUTOINCREMENT,
+	history_id INTEGER REFERENCES history(id),
+	host       TEXT    NOT NULL,
+	url        TEXT    NOT NULL,
+	tls        INTEGER DEFAULT 0,
+	in_scope   INTEGER DEFAULT 1,
+	timestamp  TEXT    NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_ws_connections_host ON websocket_connections(host);
+CREATE INDEX IF NOT EXISTS idx_ws_connections_scope ON websocket_connections(in_scope);
+
+CREATE TABLE IF NOT EXISTS websocket_frames (
+	id            INTEGER PRIMARY KEY AUTOINCREMENT,
+	connection_id INTEGER NOT NULL REFERENCES websocket_connections(id) ON DELETE CASCADE,
+	timestamp     TEXT    NOT NULL,
+	direction     INTEGER NOT NULL, -- 0 = client→server, 1 = server→client
+	opcode        INTEGER NOT NULL,
+	payload       BLOB
+);
+
+CREATE INDEX IF NOT EXISTS idx_ws_frames_connection ON websocket_frames(connection_id);
 `

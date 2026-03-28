@@ -2,11 +2,11 @@ package ui
 
 import (
 	"fmt"
+
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/data/binding"
-	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
@@ -79,19 +79,6 @@ func ShowMainWindow(fyneApp fyne.App, projectStore *store.Store, proxyServer *pr
 
 	applyTheme(fyneApp)
 
-	toggleThemeBtn := widget.NewButtonWithIcon("", theme.ColorChromaticIcon(), func() {
-		isDark := !prefs.BoolWithFallback(prefKeyDarkTheme, defaultDarkTheme)
-		prefs.SetBool(prefKeyDarkTheme, isDark)
-		applyTheme(fyneApp)
-	})
-
-	// Hide toggle if active user theme only has one variant.
-	if lt := loadActiveTheme(fyneApp); lt != nil && !lt.HasBoth {
-		toggleThemeBtn.Hide()
-	}
-
-	settingsBtn := widget.NewButtonWithIcon("", AppIcon("toolbox"), nil)
-
 	browserBtn := widget.NewButtonWithIcon("", AppIcon("web"), func() {
 		launchDefaultBrowser(fyneApp, mainWin)
 	})
@@ -140,12 +127,6 @@ func ShowMainWindow(fyneApp fyne.App, projectStore *store.Store, proxyServer *pr
 	appName := widget.NewLabel("Shiv")
 	appName.TextStyle = fyne.TextStyle{Bold: true}
 
-	functionBar := container.NewBorder(nil, nil,
-		container.NewHBox(logo, appName),
-		container.NewHBox(proxyLabel, proxyToggleBtn, settingsBtn, browserBtn, toggleThemeBtn),
-		layout.NewSpacer(),
-	)
-
 	repeater := newRepeaterTab(projectStore, mainWin)
 	loot := newLootTab(projectStore, mainWin, repeater)
 	repeater.loot = loot
@@ -163,11 +144,52 @@ func ShowMainWindow(fyneApp fyne.App, projectStore *store.Store, proxyServer *pr
 	tabs.SetTabLocation(container.TabLocationTop)
 
 	keybinds := newKeybinds(mainWin, tabs, history, repeater, prefs)
-	settingsBtn.OnTapped = func() {
+
+	// Menu items
+
+	settingsMenuItem := fyne.NewMenuItem("Settings", func() {
 		showSettingsDialog(fyneApp, mainWin, proxyServer, keybinds)
+	})
+	settingsMenuItem.Icon = AppIcon("toolbox")
+
+	toggleThemeMenuItem := fyne.NewMenuItem("Toggle Theme", func() {
+		isDark := !prefs.BoolWithFallback(prefKeyDarkTheme, defaultDarkTheme)
+		prefs.SetBool(prefKeyDarkTheme, isDark)
+		applyTheme(fyneApp)
+	})
+	toggleThemeMenuItem.Icon = theme.ColorChromaticIcon()
+	launchBrowserMenuItem := fyne.NewMenuItem("Launch Browser", func() {
+		launchDefaultBrowser(fyneApp, mainWin)
+	})
+
+	menuItems := []*fyne.MenuItem{
+		launchBrowserMenuItem,
+		toggleThemeMenuItem,
+		settingsMenuItem,
+	}
+	// Hide toggle if active user theme only has one variant.
+	if lt := loadActiveTheme(fyneApp); lt != nil && !lt.HasBoth {
+		toggleThemeMenuItem.Disabled = true
 	}
 
-	mainWin.SetContent(container.NewBorder(functionBar, nil, nil, nil, tabs))
+	menu := fyne.NewMenu("", menuItems...)
+	var menuBtn *widget.Button
+
+	menuBtn = widget.NewButtonWithIcon("", theme.MenuIcon(), func() {
+		widget.ShowPopUpMenuAtRelativePosition(menu, mainWin.Canvas(), fyne.NewPos(0, menuBtn.Size().Height), menuBtn)
+	})
+
+	optionsBar := container.NewBorder(
+		container.NewBorder(nil, nil, nil,
+			container.NewHBox(proxyLabel, proxyToggleBtn, browserBtn, menuBtn),
+		),
+		nil, nil, nil,
+	)
+
+	mainWin.SetContent(container.NewStack(
+		tabs,
+		optionsBar,
+	))
 	mainWin.Show()
 	launchWin.Close()
 }

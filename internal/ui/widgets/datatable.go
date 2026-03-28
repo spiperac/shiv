@@ -450,10 +450,8 @@ func (r *dtRenderer) layoutBody() {
 		switch {
 		case r.table.hasSelected && r.table.RowID != nil && r.table.RowID(dataIdx) == r.table.selectedID:
 			rowBg.FillColor = theme.Color(theme.ColorNameSelection)
-		case slot%2 == 0:
-			rowBg.FillColor = theme.Color(theme.ColorNameBackground)
 		default:
-			rowBg.FillColor = theme.Color(theme.ColorNameInputBackground)
+			rowBg.FillColor = theme.Color(theme.ColorNameBackground)
 		}
 		rowBg.Refresh()
 		rowBg.Show()

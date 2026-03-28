@@ -5,6 +5,7 @@ go 1.25.0
 require (
 	fyne.io/fyne/v2 v2.7.3
 	github.com/andybalholm/brotli v1.2.0
+	github.com/gorilla/websocket v1.5.3
 	modernc.org/sqlite v1.46.1
 )
 
