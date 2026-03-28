@@ -30,13 +30,21 @@ func showWebSocketWindow(fyneApp fyne.App, projectStore *store.Store, parentWin 
 
 func buildWebSocketContent(projectStore *store.Store, win fyne.Window) fyne.CanvasObject {
 
-	// ── state — always fresh slices, never aliased ────────────────────────────
+	// ── state ─────────────────────────────────────────────────────────────────
 
 	var allConns []store.WebSocketConnection
 	var filteredConns []store.WebSocketConnection
 	var allFrames []store.WebSocketFrame
 	var filteredFrames []store.WebSocketFrame
 	var selectedConnID uint64
+
+	// ── filter functions — always return fresh slices, never alias ────────────
+
+	connFilterEntry := widget.NewEntry()
+	connFilterEntry.SetPlaceHolder("Filter — host, url...")
+
+	frameFilterEntry := widget.NewEntry()
+	frameFilterEntry.SetPlaceHolder("Filter frames — payload, type...")
 
 	filterConn := func(query string) []store.WebSocketConnection {
 		q := strings.ToLower(strings.TrimSpace(query))
@@ -90,9 +98,6 @@ func buildWebSocketContent(projectStore *store.Store, win fyne.Window) fyne.Canv
 
 	// ── connections table ─────────────────────────────────────────────────────
 
-	connFilterEntry := widget.NewEntry()
-	connFilterEntry.SetPlaceHolder("Filter — host, url...")
-
 	connColumns := []widgets.DataTableColumn{
 		{Header: "ID", Width: 50},
 		{Header: "Host", Width: 220},
@@ -138,9 +143,6 @@ func buildWebSocketContent(projectStore *store.Store, win fyne.Window) fyne.Canv
 	}
 
 	// ── frames table ─────────────────────────────────────────────────────────
-
-	frameFilterEntry := widget.NewEntry()
-	frameFilterEntry.SetPlaceHolder("Filter frames — payload, type...")
 
 	frameColumns := []widgets.DataTableColumn{
 		{Header: "Dir", Width: 90},
@@ -207,7 +209,7 @@ func buildWebSocketContent(projectStore *store.Store, win fyne.Window) fyne.Canv
 		}
 	}
 
-	// ── load frames ───────────────────────────────────────────────────────────
+	// ── load frames on connection select ──────────────────────────────────────
 
 	loadFrames := func(connID uint64) {
 		go func() {
@@ -225,8 +227,6 @@ func buildWebSocketContent(projectStore *store.Store, win fyne.Window) fyne.Canv
 		}()
 	}
 
-	// ── wiring ────────────────────────────────────────────────────────────────
-
 	connTable.OnSelect = func(row int) {
 		if row >= len(filteredConns) {
 			return
@@ -234,6 +234,8 @@ func buildWebSocketContent(projectStore *store.Store, win fyne.Window) fyne.Canv
 		selectedConnID = filteredConns[row].ID
 		loadFrames(selectedConnID)
 	}
+
+	// ── filter wiring ─────────────────────────────────────────────────────────
 
 	connFilterEntry.OnChanged = func(q string) {
 		filteredConns = filterConn(q)
@@ -245,7 +247,64 @@ func buildWebSocketContent(projectStore *store.Store, win fyne.Window) fyne.Canv
 		frameTable.Refresh()
 	}
 
-	// ── refresh ───────────────────────────────────────────────────────────────
+	// ── live streaming updates ────────────────────────────────────────────────
+
+	// Watch for new connections — prepend to allConns, same as HTTP history.
+	go func() {
+		for conn := range projectStore.WebSocketConnections {
+			c := conn
+			fyne.Do(func() {
+				// Deduplicate by ID in case initial load already has it.
+				for _, existing := range allConns {
+					if existing.ID == c.ID {
+						return
+					}
+				}
+				allConns = append([]store.WebSocketConnection{c}, allConns...)
+				filteredConns = filterConn(connFilterEntry.Text)
+				connTable.Refresh()
+			})
+		}
+	}()
+
+	// Watch for new frames — reload from DB for the selected connection.
+	// Appending live frames directly causes ordering and dedup issues;
+	// reloading is correct and fast enough for pentest-scale traffic.
+	go func() {
+		for frame := range projectStore.WebSocketFrames {
+			f := frame
+			fyne.Do(func() {
+				// Always update frame count on the matching connection.
+				for i := range allConns {
+					if allConns[i].ID == f.ConnectionID {
+						allConns[i].FrameCount++
+						break
+					}
+				}
+				filteredConns = filterConn(connFilterEntry.Text)
+				connTable.Refresh()
+
+				// Only reload frames if this belongs to the selected connection.
+				if f.ConnectionID != selectedConnID {
+					return
+				}
+				go func() {
+					loaded, err := projectStore.FramesForConnection(f.ConnectionID)
+					if err != nil {
+						logger.Error("ws ui: reload frames %d: %v", f.ConnectionID, err)
+						return
+					}
+					fyne.Do(func() {
+						allFrames = loaded
+						filteredFrames = filterFrame(frameFilterEntry.Text)
+						frameTable.Refresh()
+					})
+				}()
+			})
+		}
+	}()
+
+	// ── refresh button (manual reload) ────────────────────────────────────────
 
 	refreshBtn := widget.NewButtonWithIcon("Refresh", AppIcon("history"), func() {
 		go func() {
@@ -264,7 +323,6 @@ func buildWebSocketContent(projectStore *store.Store, win fyne.Window) fyne.Canv
 			})
 		}()
 	})
-	refreshBtn.Importance = widget.HighImportance
 
 	// ── initial load ──────────────────────────────────────────────────────────
 

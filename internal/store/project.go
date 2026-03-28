@@ -12,8 +12,10 @@ type Store struct {
 	writeCh chan func() error
 	done    chan struct{}
 
-	Updates   chan Transaction
-	Intercept *InterceptGate
+	Updates              chan Transaction
+	Intercept            *InterceptGate
+	WebSocketConnections chan WebSocketConnection
+	WebSocketFrames      chan WebSocketFrame
 }
 
 func Open(path string) (*Store, error) {
@@ -24,11 +26,13 @@ func Open(path string) (*Store, error) {
 	db.SetMaxOpenConns(1)
 
 	projectStore := &Store{
-		db:        db,
-		writeCh:   make(chan func() error, 256),
-		done:      make(chan struct{}),
-		Updates:   make(chan Transaction, 256),
-		Intercept: NewInterceptGate(),
+		db:                   db,
+		writeCh:              make(chan func() error, 256),
+		done:                 make(chan struct{}),
+		Updates:              make(chan Transaction, 256),
+		Intercept:            NewInterceptGate(),
+		WebSocketConnections: make(chan WebSocketConnection, 256),
+		WebSocketFrames:      make(chan WebSocketFrame, 256),
 	}
 	if err := projectStore.migrate(); err != nil {
 		db.Close()
@@ -42,6 +46,8 @@ func Open(path string) (*Store, error) {
 func (s *Store) Close() error {
 	close(s.done)
 	close(s.Updates)
+	close(s.WebSocketConnections)
+	close(s.WebSocketFrames)
 	close(s.Intercept.queue)
 	return s.db.Close()
 }

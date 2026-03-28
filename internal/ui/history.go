@@ -3,7 +3,7 @@ package ui
 import (
 	"fmt"
 	"net"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -85,7 +85,7 @@ func (sm *siteMap) childUIDs(uid widget.TreeNodeID) []widget.TreeNodeID {
 			}
 			ids = append(ids, "h:"+h)
 		}
-		sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+		slices.Sort(ids)
 		return ids
 	}
 
@@ -115,7 +115,7 @@ func (sm *siteMap) childUIDs(uid widget.TreeNodeID) []widget.TreeNodeID {
 		}
 		ids = append(ids, "p:"+host+"|"+childPath)
 	}
-	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	slices.Sort(ids)
 	return ids
 }
 
@@ -165,18 +165,18 @@ func parseNodeID(uid widget.TreeNodeID) (host, path string, ok bool) {
 		return uid[2:], "", true
 	case strings.HasPrefix(uid, "p:"):
 		rest := uid[2:]
-		i := strings.Index(rest, "|")
-		if i < 0 {
+		before, after, ok0 := strings.Cut(rest, "|")
+		if !ok0 {
 			return "", "", false
 		}
-		return rest[:i], rest[i+1:], true
+		return before, after, true
 	}
 	return "", "", false
 }
 
 func splitPath(path string) []string {
 	var segs []string
-	for _, s := range strings.Split(path, "/") {
+	for s := range strings.SplitSeq(path, "/") {
 		if s != "" {
 			segs = append(segs, s)
 		}

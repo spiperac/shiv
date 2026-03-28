@@ -73,12 +73,23 @@ func (s *Store) LogWebSocketConnection(conn WebSocketConnection) (uint64, error)
 		id = uint64(lastID)
 		return nil
 	})
-	return id, err
+	if err != nil {
+		return 0, err
+	}
+
+	// Notify UI listeners — non-blocking, same pattern as Updates.
+	conn.ID = id
+	select {
+	case s.WebSocketConnections <- conn:
+	default:
+	}
+
+	return id, nil
 }
 
 // LogWebSocketFrame appends a single frame to an existing connection.
 func (s *Store) LogWebSocketFrame(frame WebSocketFrame) error {
-	return s.write(func() error {
+	err := s.write(func() error {
 		_, err := s.db.Exec(`
 			INSERT INTO websocket_frames (connection_id, timestamp, direction, opcode, payload)
 			VALUES (?, ?, ?, ?, ?)`,
@@ -93,6 +104,17 @@ func (s *Store) LogWebSocketFrame(frame WebSocketFrame) error {
 		}
 		return nil
 	})
+	if err != nil {
+		return err
+	}
+
+	// Notify UI listeners — non-blocking.
+	select {
+	case s.WebSocketFrames <- frame:
+	default:
+	}
+
+	return nil
 }
 
 // AllWebSocketConnections returns all WebSocket connections ordered by id
