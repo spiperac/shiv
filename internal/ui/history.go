@@ -289,7 +289,7 @@ func (h *historyTab) build() fyne.CanvasObject {
 		h.exportHAR()
 	})
 	wsBtn := widget.NewButtonWithIcon("WebSockets", AppIcon("web"), func() {
-		showWebSocketWindow(fyne.CurrentApp(), h.projectStore, h.win)
+		showWebSocketWindow(fyne.CurrentApp(), h.projectStore, h.win, h.repeater)
 	})
 
 	filterBar := container.NewBorder(nil, nil, nil,

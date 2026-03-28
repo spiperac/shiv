@@ -100,6 +100,7 @@ func (s *Store) migrate() error {
 		`ALTER TABLE loot ADD COLUMN raw_request TEXT DEFAULT ''`,
 		`ALTER TABLE loot ADD COLUMN raw_response TEXT DEFAULT ''`,
 		`ALTER TABLE history ADD COLUMN proto TEXT NOT NULL DEFAULT 'HTTP/1.1'`,
+		`ALTER TABLE repeater_tabs ADD COLUMN tab_type TEXT NOT NULL DEFAULT 'http'`,
 	}
 	for _, migration := range migrations {
 		s.db.Exec(migration)

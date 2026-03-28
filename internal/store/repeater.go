@@ -11,6 +11,7 @@ type RepeaterTab struct {
 	Host         string
 	Port         int
 	TLS          bool
+	TabType      string // "http" or "websocket"
 	RawRequest   string
 	LastResponse string
 	Position     int
@@ -19,7 +20,7 @@ type RepeaterTab struct {
 // AllRepeaterTabs returns all saved repeater tabs ordered by position.
 func (s *Store) AllRepeaterTabs() ([]RepeaterTab, error) {
 	rows, err := s.db.Query(`
-		SELECT id, name, host, port, tls, raw_request, COALESCE(last_response, ''), position
+		SELECT id, name, host, port, tls, COALESCE(tab_type, 'http'), raw_request, COALESCE(last_response, ''), position
 		FROM repeater_tabs
 		ORDER BY position ASC`)
 	if err != nil {
@@ -31,10 +32,13 @@ func (s *Store) AllRepeaterTabs() ([]RepeaterTab, error) {
 	for rows.Next() {
 		var tab RepeaterTab
 		var tlsFlag int
-		if err := rows.Scan(&tab.ID, &tab.Name, &tab.Host, &tab.Port, &tlsFlag, &tab.RawRequest, &tab.LastResponse, &tab.Position); err != nil {
+		if err := rows.Scan(&tab.ID, &tab.Name, &tab.Host, &tab.Port, &tlsFlag, &tab.TabType, &tab.RawRequest, &tab.LastResponse, &tab.Position); err != nil {
 			return nil, fmt.Errorf("store: scan repeater tab: %w", err)
 		}
 		tab.TLS = tlsFlag == 1
+		if tab.TabType == "" {
+			tab.TabType = "http"
+		}
 		tabs = append(tabs, tab)
 	}
 	return tabs, rows.Err()
@@ -42,12 +46,16 @@ func (s *Store) AllRepeaterTabs() ([]RepeaterTab, error) {
 
 // SaveRepeaterTab inserts a new repeater tab and returns its ID.
 func (s *Store) SaveRepeaterTab(tab RepeaterTab) (int64, error) {
+	tabType := tab.TabType
+	if tabType == "" {
+		tabType = "http"
+	}
 	var id int64
 	err := s.write(func() error {
 		result, err := s.db.Exec(`
-			INSERT INTO repeater_tabs (name, host, port, tls, raw_request, last_response, position)
-			VALUES (?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(position), 0) + 1 FROM repeater_tabs))`,
-			tab.Name, tab.Host, tab.Port, boolToInt(tab.TLS), tab.RawRequest, tab.LastResponse,
+			INSERT INTO repeater_tabs (name, host, port, tls, tab_type, raw_request, last_response, position)
+			VALUES (?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(position), 0) + 1 FROM repeater_tabs))`,
+			tab.Name, tab.Host, tab.Port, boolToInt(tab.TLS), tabType, tab.RawRequest, tab.LastResponse,
 		)
 		if err != nil {
 			return fmt.Errorf("store: save repeater tab: %w", err)

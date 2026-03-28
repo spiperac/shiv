@@ -15,7 +15,7 @@ import (
 
 var wsWin fyne.Window
 
-func showWebSocketWindow(fyneApp fyne.App, projectStore *store.Store, parentWin fyne.Window) {
+func showWebSocketWindow(fyneApp fyne.App, projectStore *store.Store, parentWin fyne.Window, repeater *repeaterTab) {
 	if wsWin != nil {
 		wsWin.RequestFocus()
 		return
@@ -24,11 +24,11 @@ func showWebSocketWindow(fyneApp fyne.App, projectStore *store.Store, parentWin 
 	wsWin.Resize(fyne.NewSize(1100, 650))
 	wsWin.SetOnClosed(func() { wsWin = nil })
 	closeOnEscape(wsWin, wsWin.Close)
-	wsWin.SetContent(buildWebSocketContent(projectStore, wsWin))
+	wsWin.SetContent(buildWebSocketContent(projectStore, wsWin, repeater))
 	wsWin.Show()
 }
 
-func buildWebSocketContent(projectStore *store.Store, win fyne.Window) fyne.CanvasObject {
+func buildWebSocketContent(projectStore *store.Store, win fyne.Window, repeater *repeaterTab) fyne.CanvasObject {
 
 	// ── state ─────────────────────────────────────────────────────────────────
 
@@ -233,6 +233,30 @@ func buildWebSocketContent(projectStore *store.Store, win fyne.Window) fyne.Canv
 		}
 		selectedConnID = filteredConns[row].ID
 		loadFrames(selectedConnID)
+	}
+
+	connTable.MenuItems = func(row int) []widgets.ContextMenuItem {
+		if row >= len(filteredConns) {
+			return nil
+		}
+		c := filteredConns[row]
+		return []widgets.ContextMenuItem{
+			{
+				Label: "Send to Repeater",
+				Action: func() {
+					if repeater != nil {
+						name := c.Host
+						repeater.AddWSTab(name, c.URL, c.TLS)
+					}
+				},
+			},
+			{
+				Label: "Copy URL",
+				Action: func() {
+					fyne.CurrentApp().Clipboard().SetContent(c.URL)
+				},
+			},
+		}
 	}
 
 	// ── filter wiring ─────────────────────────────────────────────────────────

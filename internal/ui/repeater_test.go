@@ -6,8 +6,11 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
+	"github.com/gorilla/websocket"
 	internalhttp "github.com/shiv/internal/http"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -200,4 +203,176 @@ func TestSendRawRequest_StripAcceptEncoding(t *testing.T) {
 
 	req := <-received
 	assert.NotContains(t, req, "Accept-Encoding")
+}
+
+func TestSendRawRequest_MultipleRequests_IndependentConnections(t *testing.T) {
+	// Verify that two sequential SendRaw calls use independent connections
+	// and both get correct responses.
+	responses := []string{
+		"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nfirst",
+		"HTTP/1.1 201 Created\r\nContent-Length: 6\r\n\r\nsecond",
+	}
+
+	for i, expected := range responses {
+		host, port := startMockHTTPServer(t, expected)
+		raw := fmt.Sprintf("GET / HTTP/1.1\r\nHost: %s:%d\r\n\r\n", host, port)
+		result, err := internalhttp.SendRaw(internalhttp.RawRequestOptions{
+			Host: host, Port: port, TLS: false, RawReq: raw,
+		})
+		require.NoError(t, err, "request %d failed", i)
+		if i == 0 {
+			assert.Contains(t, result.Raw, "200")
+			assert.Contains(t, result.Raw, "first")
+		} else {
+			assert.Contains(t, result.Raw, "201")
+			assert.Contains(t, result.Raw, "second")
+		}
+	}
+}
+
+func TestSendRawRequest_CookieJarApplied(t *testing.T) {
+	received := make(chan string, 1)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { ln.Close() })
+
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		buf := make([]byte, 4096)
+		n, _ := conn.Read(buf)
+		received <- string(buf[:n])
+		fmt.Fprint(conn, "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+	}()
+
+	addr := ln.Addr().(*net.TCPAddr)
+	raw := fmt.Sprintf("GET / HTTP/1.1\r\nHost: 127.0.0.1:%d\r\n\r\n", addr.Port)
+	internalhttp.SendRaw(internalhttp.RawRequestOptions{
+		Host:      "127.0.0.1",
+		Port:      addr.Port,
+		TLS:       false,
+		RawReq:    raw,
+		CookieJar: map[string]string{"session": "abc123", "user": "test"},
+	})
+
+	req := <-received
+	assert.Contains(t, req, "Cookie:")
+	assert.Contains(t, req, "session=abc123")
+}
+
+// ── WebSocket send via repeater ───────────────────────────────────────────────
+
+// wsEchoServer starts a plain (non-TLS) WebSocket echo server for repeater tests.
+func wsEchoServer(t *testing.T) string {
+	t.Helper()
+	upgrader := websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		for {
+			mt, msg, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			if err := conn.WriteMessage(mt, msg); err != nil {
+				return
+			}
+		}
+	}))
+	t.Cleanup(srv.Close)
+	// Convert http:// to ws://
+	return strings.Replace(srv.URL, "http://", "ws://", 1)
+}
+
+func TestRepeaterWS_SendRaw_EchoesMessage(t *testing.T) {
+	wsURL := wsEchoServer(t)
+
+	dialer := websocket.Dialer{}
+	conn, _, err := dialer.Dial(wsURL+"/", nil)
+	require.NoError(t, err)
+	defer conn.Close()
+
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte("repeater test")))
+	_, payload, err := conn.ReadMessage()
+	require.NoError(t, err)
+	assert.Equal(t, "repeater test", string(payload))
+}
+
+func TestRepeaterWS_SendRaw_MultipleMessages(t *testing.T) {
+	wsURL := wsEchoServer(t)
+
+	dialer := websocket.Dialer{}
+	conn, _, err := dialer.Dial(wsURL+"/", nil)
+	require.NoError(t, err)
+	defer conn.Close()
+
+	messages := []string{"first", "second", "third"}
+	for _, msg := range messages {
+		require.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte(msg)))
+		_, payload, err := conn.ReadMessage()
+		require.NoError(t, err)
+		assert.Equal(t, msg, string(payload))
+	}
+}
+
+func TestRepeaterWS_SendRaw_EmptyMessage(t *testing.T) {
+	wsURL := wsEchoServer(t)
+
+	dialer := websocket.Dialer{}
+	conn, _, err := dialer.Dial(wsURL+"/", nil)
+	require.NoError(t, err)
+	defer conn.Close()
+
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte("")))
+	_, payload, err := conn.ReadMessage()
+	require.NoError(t, err)
+	assert.Equal(t, "", string(payload))
+}
+
+func TestRepeaterWS_SendRaw_BinaryMessage(t *testing.T) {
+	wsURL := wsEchoServer(t)
+
+	dialer := websocket.Dialer{}
+	conn, _, err := dialer.Dial(wsURL+"/", nil)
+	require.NoError(t, err)
+	defer conn.Close()
+
+	payload := []byte{0x00, 0x01, 0x02, 0xFF}
+	require.NoError(t, conn.WriteMessage(websocket.BinaryMessage, payload))
+	msgType, received, err := conn.ReadMessage()
+	require.NoError(t, err)
+	assert.Equal(t, websocket.BinaryMessage, msgType)
+	assert.Equal(t, payload, received)
+}
+
+func TestRepeaterWS_ConnectionRefused(t *testing.T) {
+	dialer := websocket.Dialer{}
+	_, _, err := dialer.Dial("ws://127.0.0.1:1/", nil)
+	assert.Error(t, err)
+}
+
+func TestRepeaterWS_CleanClose(t *testing.T) {
+	wsURL := wsEchoServer(t)
+
+	dialer := websocket.Dialer{}
+	conn, _, err := dialer.Dial(wsURL+"/", nil)
+	require.NoError(t, err)
+
+	// Send a message, receive echo, then close cleanly.
+	require.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte("bye")))
+	_, payload, err := conn.ReadMessage()
+	require.NoError(t, err)
+	assert.Equal(t, "bye", string(payload))
+
+	// Clean close.
+	err = conn.WriteMessage(websocket.CloseMessage,
+		websocket.FormatCloseMessage(websocket.CloseNormalClosure, "done"))
+	require.NoError(t, err)
+	conn.Close()
 }
