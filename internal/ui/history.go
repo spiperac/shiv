@@ -281,6 +281,9 @@ func (h *historyTab) loadFirstPage() {
 				h.mu.Unlock()
 				return
 			}
+			// A loadNextPage may have been in-flight when the filter changed.
+			// Reset it so pagination works correctly on the new filter.
+			h.loadingMore = false
 			h.displayed = txs
 			h.hasMore = len(txs) == store.PageSize
 			if len(txs) > 0 {
@@ -307,6 +310,7 @@ func (h *historyTab) loadNextPage() {
 		return
 	}
 	cursor := h.cursor
+	localID := h.queryID
 	h.loadingMore = true
 	h.mu.Unlock()
 
@@ -322,6 +326,13 @@ func (h *historyTab) loadNextPage() {
 		}
 		fyne.Do(func() {
 			h.mu.Lock()
+			// If filter changed while we were fetching, discard results and
+			// reset loadingMore so pagination works again on the new filter.
+			if localID != h.queryID {
+				h.loadingMore = false
+				h.mu.Unlock()
+				return
+			}
 			h.displayed = append(h.displayed, txs...)
 			h.hasMore = len(txs) == store.PageSize
 			if len(txs) > 0 {
