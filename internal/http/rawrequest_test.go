@@ -15,8 +15,8 @@ import (
 func TestParseHostFromRaw_HostOnly(t *testing.T) {
 	host, port, useTLS := ParseHostFromRaw("GET / HTTP/1.1\r\nHost: example.com\r\n\r\n")
 	assert.Equal(t, "example.com", host)
-	assert.Equal(t, 443, port)
-	assert.True(t, useTLS)
+	assert.Equal(t, 80, port)
+	assert.False(t, useTLS)
 }
 
 func TestParseHostFromRaw_HostWithPort443(t *testing.T) {
@@ -62,7 +62,7 @@ func TestParseHostFromRaw_CaseInsensitive(t *testing.T) {
 func TestParseHostFromRaw_LFOnly(t *testing.T) {
 	host, port, _ := ParseHostFromRaw("GET / HTTP/1.1\nHost: example.com\n\n")
 	assert.Equal(t, "example.com", host)
-	assert.Equal(t, 443, port)
+	assert.Equal(t, 80, port)
 }
 
 // ── ParseRawHeaders ───────────────────────────────────────────────────────────
@@ -107,10 +107,12 @@ func TestNormalizeLineEndings_AlreadyCRLF(t *testing.T) {
 }
 
 func TestNormalizeLineEndings_FoldsContinuation(t *testing.T) {
+	// Continuation line folding was removed to avoid corrupting body content.
+	// normalizeLineEndings only touches the header section and converts LF to CRLF.
+	// Continuation lines are preserved as-is.
 	in := "GET / HTTP/1.1\r\nHost: example.com\r\n continued\r\n\r\n"
 	out := normalizeLineEndings(in)
-	assert.NotContains(t, out, "\r\n continued")
-	assert.Contains(t, out, " continued")
+	assert.Equal(t, in, out)
 }
 
 // ── rewriteHeaders ────────────────────────────────────────────────────────────

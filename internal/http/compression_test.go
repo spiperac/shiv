@@ -104,13 +104,23 @@ func TestDecompress_LargeBody(t *testing.T) {
 // ── IsBinary ──────────────────────────────────────────────────────────────────
 
 func TestIsBinary_KnownEncodingsNotBinary(t *testing.T) {
-	// Even image content-type should not be binary if we can decompress the encoding
+	// Known encodings we can decompress fall through to the Content-Type check.
+	// image/png is still binary even with a known encoding — the encoding tells
+	// us we can decompress it, but the content type determines binary/text.
+	for _, enc := range []string{"gzip", "deflate", "br", "zstd"} {
+		h := http.Header{
+			"Content-Encoding": []string{enc},
+			"Content-Type":     []string{"text/plain"},
+		}
+		assert.False(t, IsBinary(h), "encoding %s with text/plain should not be binary", enc)
+	}
+	// image/png with a known encoding is still binary.
 	for _, enc := range []string{"gzip", "deflate", "br", "zstd"} {
 		h := http.Header{
 			"Content-Encoding": []string{enc},
 			"Content-Type":     []string{"image/png"},
 		}
-		assert.False(t, IsBinary(h), "encoding %s with image type should not be binary", enc)
+		assert.True(t, IsBinary(h), "encoding %s with image/png should be binary", enc)
 	}
 }
 

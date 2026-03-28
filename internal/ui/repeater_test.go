@@ -19,8 +19,8 @@ func TestParseHostFromRaw_HostOnly(t *testing.T) {
 	raw := "GET / HTTP/1.1\r\nHost: example.com\r\n\r\n"
 	host, port, useTLS := internalhttp.ParseHostFromRaw(raw)
 	assert.Equal(t, "example.com", host)
-	assert.Equal(t, 443, port)
-	assert.True(t, useTLS)
+	assert.Equal(t, 80, port)
+	assert.False(t, useTLS)
 }
 
 func TestParseHostFromRaw_HostWithPort80(t *testing.T) {
@@ -65,7 +65,7 @@ func TestParseHostFromRaw_LFOnly(t *testing.T) {
 	raw := "GET / HTTP/1.1\nHost: example.com\n\n"
 	host, port, _ := internalhttp.ParseHostFromRaw(raw)
 	assert.Equal(t, "example.com", host)
-	assert.Equal(t, 443, port)
+	assert.Equal(t, 80, port)
 }
 
 // ── Decompress ────────────────────────────────────────────────────────────────
