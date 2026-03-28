@@ -119,7 +119,7 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		// way as regular HTTP requests. Hand off to the WebSocket handler which
 		// manages the entire session and returns when the connection closes.
 		if isWebSocketUpgrade(req) {
-			p.handleWebSocketTLS(browserTLS, req, bareHost, r.Host)
+			p.handleWebSocketTLS(browserTLS, browserReader, req, bareHost, r.Host)
 			return
 		}
 		interceptedReq, reqBody, shouldForward := p.store.Intercept.Hold(req, reqBody)

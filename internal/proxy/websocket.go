@@ -1,7 +1,9 @@
 package proxy
 
 import (
+	"bufio"
 	"crypto/tls"
+	"fmt"
 	"net"
 	"net/http"
 	"net/url"
@@ -20,114 +22,52 @@ func isWebSocketUpgrade(req *http.Request) bool {
 	return websocket.IsWebSocketUpgrade(req)
 }
 
-// singleConnListener is a net.Listener that serves exactly one connection.
-// Used to feed an already-established net.Conn into http.Serve so we get
-// a proper http.ResponseWriter for gorilla's Upgrader.
-type singleConnListener struct {
-	conn   net.Conn
-	ch     chan net.Conn
-	closed chan struct{}
-}
-
-func newSingleConnListener(conn net.Conn) *singleConnListener {
-	l := &singleConnListener{
-		conn:   conn,
-		ch:     make(chan net.Conn, 1),
-		closed: make(chan struct{}),
-	}
-	l.ch <- conn
-	return l
-}
-
-func (l *singleConnListener) Accept() (net.Conn, error) {
-	select {
-	case conn := <-l.ch:
-		return conn, nil
-	case <-l.closed:
-		return nil, net.ErrClosed
-	}
-}
-
-func (l *singleConnListener) Close() error {
-	select {
-	case <-l.closed:
-	default:
-		close(l.closed)
-	}
-	return nil
-}
-
-func (l *singleConnListener) Addr() net.Addr {
-	return l.conn.LocalAddr()
-}
-
 // handleWebSocketTLS handles a WebSocket upgrade over an already-established
-// TLS connection. It spins up a single-connection HTTP/1.1 server so that
-// gorilla's Upgrader receives a proper http.ResponseWriter, then proxies
-// frames bidirectionally between browser and upstream.
+// TLS connection.
+//
+// browserReader is the *bufio.Reader that was used to parse the upgrade
+// request in the H1 loop. It must be passed here — not discarded — because
+// bufio.Reader reads ahead and may have buffered bytes beyond the end of the
+// HTTP request. Discarding it and creating a new bufio.Reader over the raw
+// conn would silently lose those bytes, corrupting the WebSocket stream.
+//
+// Design:
+//  1. Dial the upstream as a WebSocket client.
+//  2. Give gorilla's Upgrader a hijackWriter that wraps (tlsConn, browserReader)
+//     so gorilla writes the 101 and takes back the conn via Hijack() —
+//     the read side of Hijack uses the existing browserReader, preserving
+//     any buffered bytes. Zero replay. Zero data loss.
+//  3. Proxy frames bidirectionally with gorilla on both sides.
 func (p *Proxy) handleWebSocketTLS(
 	tlsConn *tls.Conn,
+	browserReader *bufio.Reader,
 	req *http.Request,
 	bareHost string,
 	hostWithPort string,
 ) {
 	defer recoverPanic("websocket " + bareHost)
 
-	// We need to replay the already-read request back through http.Serve.
-	// The cleanest way: create a single-connection listener and serve it.
-	// The handler will see the request via the normal ServeHTTP path.
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		p.serveWebSocket(w, r, bareHost, hostWithPort, true)
-	})
-
-	srv := &http.Server{
-		Handler:      handler,
-		ReadTimeout:  0, // no timeout — WebSocket connections are long-lived
-		WriteTimeout: 0,
-	}
-
-	// Wrap the TLS conn so it replays the buffered request bytes first.
-	// Since the request was already read from the bufio.Reader in the loop,
-	// we need to put it back. We do this by using a replayConn that prepends
-	// the serialised request bytes before the live connection data.
-	var reqBuf []byte
-	reqBuf = append(reqBuf, req.Method+" "+req.URL.RequestURI()+" HTTP/1.1\r\n"...)
-	reqBuf = append(reqBuf, "Host: "+req.Host+"\r\n"...)
-	for k, vals := range req.Header {
-		for _, v := range vals {
-			reqBuf = append(reqBuf, k+": "+v+"\r\n"...)
-		}
-	}
-	reqBuf = append(reqBuf, "\r\n"...)
-
-	replayConn := &replayConn{Conn: tlsConn, buf: reqBuf}
-	ln := newSingleConnListener(replayConn)
-
-	// Serve blocks until the single connection is done.
-	_ = srv.Serve(ln)
-}
-
-// serveWebSocket is the http.HandlerFunc called by the single-conn server.
-// It upgrades the browser connection, dials the upstream, and proxies frames.
-func (p *Proxy) serveWebSocket(
-	w http.ResponseWriter,
-	req *http.Request,
-	bareHost string,
-	hostWithPort string,
-	useTLS bool,
-) {
-	scheme := "ws"
-	if useTLS {
-		scheme = "wss"
-	}
 	upstreamURL := &url.URL{
-		Scheme:   scheme,
+		Scheme:   "wss",
 		Host:     hostWithPort,
 		Path:     req.URL.Path,
 		RawQuery: req.URL.RawQuery,
 	}
 
-	// Dial the upstream WebSocket.
+	// ── 1. Dial upstream ──────────────────────────────────────────────────────
+
+	upstreamHeaders := http.Header{}
+	for k, vals := range req.Header {
+		switch k {
+		case "Upgrade", "Connection", "Sec-Websocket-Key",
+			"Sec-Websocket-Version", "Sec-Websocket-Extensions",
+			"Sec-Websocket-Protocol":
+			// Let gorilla's dialer handle these.
+		default:
+			upstreamHeaders[k] = vals
+		}
+	}
+
 	dialer := websocket.Dialer{
 		TLSClientConfig: &tls.Config{
 			ServerName:         bareHost,
@@ -136,47 +76,45 @@ func (p *Proxy) serveWebSocket(
 		HandshakeTimeout: 10 * time.Second,
 	}
 
-	upstreamHeaders := http.Header{}
-	for k, vals := range req.Header {
-		switch k {
-		case "Upgrade", "Connection", "Sec-Websocket-Key",
-			"Sec-Websocket-Version", "Sec-Websocket-Extensions",
-			"Sec-Websocket-Protocol":
-			// gorilla handles these
-		default:
-			upstreamHeaders[k] = vals
-		}
-	}
-
 	upstreamConn, upstreamResp, err := dialer.Dial(upstreamURL.String(), upstreamHeaders)
 	if err != nil {
 		logger.Error("ws: dial upstream %s: %v", upstreamURL, err)
-		http.Error(w, "bad gateway", http.StatusBadGateway)
+		writeWSError(tlsConn, http.StatusBadGateway)
 		return
 	}
 	defer upstreamConn.Close()
+
+	// ── 2. Upgrade browser conn ───────────────────────────────────────────────
+	//
+	// hijackWriter implements http.ResponseWriter + http.Hijacker over
+	// (tlsConn, browserReader). When gorilla's Upgrader calls Hijack(), it
+	// gets back the existing bufio.ReadWriter — the read side IS browserReader,
+	// so any bytes already buffered by the H1 loop are not lost.
 
 	responseHeader := http.Header{}
 	if proto := upstreamResp.Header.Get("Sec-Websocket-Protocol"); proto != "" {
 		responseHeader.Set("Sec-WebSocket-Protocol", proto)
 	}
 
+	hw := newHijackWriter(tlsConn, browserReader)
 	upgrader := websocket.Upgrader{
 		CheckOrigin:     func(r *http.Request) bool { return true },
 		ReadBufferSize:  wsFrameSizeLimit,
 		WriteBufferSize: wsFrameSizeLimit,
 	}
-	browserConn, err := upgrader.Upgrade(w, req, responseHeader)
+	browserConn, err := upgrader.Upgrade(hw, req, responseHeader)
 	if err != nil {
 		logger.Error("ws: upgrade browser for %s: %v", bareHost, err)
 		return
 	}
 	defer browserConn.Close()
 
+	// ── 3. Log connection ─────────────────────────────────────────────────────
+
 	connID, err := p.store.LogWebSocketConnection(store.WebSocketConnection{
 		Host:      hostWithPort,
 		URL:       upstreamURL.String(),
-		TLS:       useTLS,
+		TLS:       true,
 		InScope:   p.store.InScope(hostWithPort),
 		Timestamp: time.Now(),
 	})
@@ -185,6 +123,8 @@ func (p *Proxy) serveWebSocket(
 	}
 
 	logger.Info("ws: connected %s%s", bareHost, req.URL.Path)
+
+	// ── 4. Bidirectional frame proxy ──────────────────────────────────────────
 
 	done := make(chan struct{}, 2)
 
@@ -249,19 +189,46 @@ func (p *Proxy) logWSFrame(connID uint64, dir store.WebSocketDirection, msgType 
 	}
 }
 
-// replayConn wraps a net.Conn and prepends buffered bytes before live reads.
-// Used to replay a request that was already read into a buffer back into
-// an http.Server that expects to read it from the connection.
-type replayConn struct {
-	net.Conn
-	buf []byte
+// writeWSError writes a minimal HTTP error response directly to a raw conn.
+// Used when the upstream dial fails before the 101 is sent.
+func writeWSError(conn net.Conn, code int) {
+	fmt.Fprintf(conn, "HTTP/1.1 %d %s\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+		code, http.StatusText(code))
 }
 
-func (c *replayConn) Read(b []byte) (int, error) {
-	if len(c.buf) > 0 {
-		n := copy(b, c.buf)
-		c.buf = c.buf[n:]
-		return n, nil
+// hijackWriter implements http.ResponseWriter and http.Hijacker over a raw
+// net.Conn + an existing *bufio.Reader.
+//
+// The critical invariant: the bufio.Reader passed here MUST be the same one
+// used to parse the HTTP upgrade request. gorilla's Upgrader calls Hijack()
+// to take ownership of the connection — the read side of the returned
+// bufio.ReadWriter is this same reader, so any bytes already buffered in it
+// (read-ahead past the end of the HTTP request) are not lost.
+//
+// The write side is a fresh bufio.Writer over the raw conn — gorilla flushes
+// it after writing the 101 response.
+type hijackWriter struct {
+	conn   net.Conn
+	reader *bufio.Reader
+	header http.Header
+}
+
+func newHijackWriter(conn net.Conn, reader *bufio.Reader) *hijackWriter {
+	return &hijackWriter{
+		conn:   conn,
+		reader: reader,
+		header: make(http.Header),
 	}
-	return c.Conn.Read(b)
+}
+
+func (hw *hijackWriter) Header() http.Header         { return hw.header }
+func (hw *hijackWriter) WriteHeader(_ int)           {}
+func (hw *hijackWriter) Write(b []byte) (int, error) { return hw.conn.Write(b) }
+
+// Hijack returns the raw conn and a bufio.ReadWriter whose read side is the
+// existing browserReader — preserving any buffered bytes — and whose write
+// side is a fresh writer over the conn.
+func (hw *hijackWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	brw := bufio.NewReadWriter(hw.reader, bufio.NewWriter(hw.conn))
+	return hw.conn, brw, nil
 }
