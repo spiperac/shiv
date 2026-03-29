@@ -70,7 +70,7 @@ func main() {
 		prefs := fyneApp.Preferences()
 
 		pluginsDir := prefs.StringWithFallback("plugins_dir", fyneApp.Storage().RootURI().Path()+"/plugins")
-		engine, err := plugin.NewEngine(pluginsDir, projectStore)
+		engine, err := plugin.NewEngine(pluginsDir, projectStore, bus)
 		if err != nil {
 			logger.Error("plugin engine: %v", err)
 		} else if engine != nil {

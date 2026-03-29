@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"sync"
 
 	_ "modernc.org/sqlite"
 )
@@ -17,6 +18,13 @@ type Store struct {
 	WebSocketConnections chan WebSocketConnection
 	WebSocketFrames      chan WebSocketFrame
 	LootEntries          chan struct{}
+	PluginEntries        chan struct{}
+
+	// pluginLogs holds in-memory log lines per plugin name.
+	// Protected by pluginLogsMu — separate from the SQLite write serialiser
+	// because log appends must never block on DB I/O.
+	pluginLogsMu sync.RWMutex
+	pluginLogs   map[string][]string
 }
 
 func Open(path string) (*Store, error) {
@@ -35,6 +43,8 @@ func Open(path string) (*Store, error) {
 		WebSocketConnections: make(chan WebSocketConnection, 256),
 		WebSocketFrames:      make(chan WebSocketFrame, 256),
 		LootEntries:          make(chan struct{}, 256),
+		PluginEntries:        make(chan struct{}, 256),
+		pluginLogs:           make(map[string][]string),
 	}
 	if err := projectStore.migrate(); err != nil {
 		db.Close()
@@ -51,6 +61,7 @@ func (s *Store) Close() error {
 	close(s.WebSocketConnections)
 	close(s.WebSocketFrames)
 	close(s.LootEntries)
+	close(s.PluginEntries)
 	close(s.Intercept.queue)
 	return s.db.Close()
 }
@@ -202,4 +213,10 @@ CREATE TABLE IF NOT EXISTS websocket_frames (
 );
 
 CREATE INDEX IF NOT EXISTS idx_ws_frames_connection ON websocket_frames(connection_id);
+
+CREATE TABLE IF NOT EXISTS plugins (
+	name    TEXT PRIMARY KEY,
+	path    TEXT NOT NULL DEFAULT '',
+	enabled INTEGER NOT NULL DEFAULT 1
+);
 `

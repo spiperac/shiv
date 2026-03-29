@@ -33,6 +33,18 @@ type WebSocketFrameObserver interface {
 	ObserveWebSocketFrame(WebSocketFrameEvent) WebSocketFrameResult
 }
 
+// PluginLogObserver is called synchronously when a plugin emits a log line.
+// The store implements this to buffer lines in memory and notify the UI.
+type PluginLogObserver interface {
+	ObservePluginLog(PluginLogEvent)
+}
+
+// PluginEnabledObserver is called synchronously when the UI toggles a plugin.
+// Both the engine (to skip hooks) and the store (to persist state) implement this.
+type PluginEnabledObserver interface {
+	ObservePluginEnabled(SetPluginEnabledEvent)
+}
+
 // ── Func adapters ─────────────────────────────────────────────────────────────
 // Allow main.go to register plain closures without declaring named types.
 
@@ -60,6 +72,18 @@ func (f WebSocketFrameObserverFunc) ObserveWebSocketFrame(e WebSocketFrameEvent)
 	return f(e)
 }
 
+type PluginLogObserverFunc func(PluginLogEvent)
+
+func (f PluginLogObserverFunc) ObservePluginLog(e PluginLogEvent) {
+	f(e)
+}
+
+type PluginEnabledObserverFunc func(SetPluginEnabledEvent)
+
+func (f PluginEnabledObserverFunc) ObservePluginEnabled(e SetPluginEnabledEvent) {
+	f(e)
+}
+
 // ── Bus ───────────────────────────────────────────────────────────────────────
 
 // Bus holds registered handlers and dispatches events to them.
@@ -68,11 +92,13 @@ func (f WebSocketFrameObserverFunc) ObserveWebSocketFrame(e WebSocketFrameEvent)
 // the refactor: store.Log emits to the Updates channel which the UI reads
 // in arrival order. Making observers async would break this.
 type Bus struct {
-	mu                 sync.RWMutex
-	requestMiddlewares []RequestMiddleware
-	responseObservers  []ResponseObserver
-	wsConnObservers    []WebSocketConnectionObserver
-	wsFrameObservers   []WebSocketFrameObserver
+	mu                     sync.RWMutex
+	requestMiddlewares     []RequestMiddleware
+	responseObservers      []ResponseObserver
+	wsConnObservers        []WebSocketConnectionObserver
+	wsFrameObservers       []WebSocketFrameObserver
+	pluginLogObservers     []PluginLogObserver
+	pluginEnabledObservers []PluginEnabledObserver
 }
 
 // NewBus returns a ready-to-use Bus with no handlers registered.
@@ -81,9 +107,9 @@ func NewBus() *Bus {
 }
 
 // Register adds a handler to the bus. The handler is matched against all
-// four handler interfaces — a single type may implement multiple interfaces
+// handler interfaces — a single type may implement multiple interfaces
 // and will be registered for each one it satisfies. Panics if h implements
-// none of the four interfaces (programming error).
+// none of the interfaces (programming error).
 func (b *Bus) Register(h any) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -103,6 +129,14 @@ func (b *Bus) Register(h any) {
 	}
 	if v, ok := h.(WebSocketFrameObserver); ok {
 		b.wsFrameObservers = append(b.wsFrameObservers, v)
+		matched = true
+	}
+	if v, ok := h.(PluginLogObserver); ok {
+		b.pluginLogObservers = append(b.pluginLogObservers, v)
+		matched = true
+	}
+	if v, ok := h.(PluginEnabledObserver); ok {
+		b.pluginEnabledObservers = append(b.pluginEnabledObservers, v)
 		matched = true
 	}
 	if !matched {
@@ -179,4 +213,28 @@ func (b *Bus) EmitWebSocketFrame(e WebSocketFrameEvent) WebSocketFrameResult {
 		}
 	}
 	return result
+}
+
+// EmitPluginLog calls all PluginLogObservers in registration order.
+// Runs synchronously.
+func (b *Bus) EmitPluginLog(e PluginLogEvent) {
+	b.mu.RLock()
+	obs := b.pluginLogObservers
+	b.mu.RUnlock()
+
+	for _, o := range obs {
+		o.ObservePluginLog(e)
+	}
+}
+
+// EmitSetPluginEnabled calls all PluginEnabledObservers in registration order.
+// Runs synchronously.
+func (b *Bus) EmitSetPluginEnabled(e SetPluginEnabledEvent) {
+	b.mu.RLock()
+	obs := b.pluginEnabledObservers
+	b.mu.RUnlock()
+
+	for _, o := range obs {
+		o.ObservePluginEnabled(e)
+	}
 }

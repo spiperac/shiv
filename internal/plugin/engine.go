@@ -12,20 +12,48 @@ import (
 )
 
 // Engine loads all Lua plugins from a directory and implements
-// events.RequestMiddleware and events.ResponseObserver so it can be
-// registered directly on the bus.
+// events.RequestMiddleware, events.ResponseObserver,
+// events.WebSocketFrameObserver, and events.PluginEnabledObserver
+// so it can be registered directly on the bus.
 type Engine struct {
 	plugins []*Plugin
+	bus     *events.Bus
 }
 
-// NewEngine loads all *.lua files from dir and returns a ready Engine.
+// NewEngine loads all *.lua files from dir, registers each in the store,
+// restores persisted enabled state, and returns a ready Engine.
 // Plugins that fail to load are skipped.
-func NewEngine(dir string, st *store.Store) (*Engine, error) {
+func NewEngine(dir string, st *store.Store, bus *events.Bus) (*Engine, error) {
 	plugins, err := loadDir(dir, st)
 	if err != nil {
 		return nil, err
 	}
-	return &Engine{plugins: plugins}, nil
+
+	e := &Engine{plugins: plugins, bus: bus}
+
+	for _, p := range plugins {
+		// Persist plugin record; preserves existing enabled state on conflict.
+		if err := st.UpsertPlugin(p.name, p.path); err != nil {
+			logger.Error("plugin: upsert %s: %v", p.name, err)
+		}
+		// Restore enabled state from previous session.
+		if enabled, err := st.PluginEnabled(p.name); err == nil {
+			p.enabled.Store(enabled)
+		}
+		// Drain any log() calls made during on_load so they reach the UI.
+		e.emitLogs(p)
+	}
+
+	return e, nil
+}
+
+// emitLogs drains a plugin's log buffer and emits each line onto the bus.
+// Called after every hook invocation, including on error, so no log line
+// is ever lost.
+func (e *Engine) emitLogs(p *Plugin) {
+	for _, line := range p.drainLogs() {
+		e.bus.EmitPluginLog(events.PluginLogEvent{Name: p.name, Message: line})
+	}
 }
 
 // HandleRequest implements events.RequestMiddleware.
@@ -43,6 +71,9 @@ func (e *Engine) HandleRequest(ev events.RequestEvent) events.RequestResult {
 	}
 
 	for _, p := range e.plugins {
+		if !p.enabled.Load() {
+			continue
+		}
 		if !p.has("on_request") {
 			continue
 		}
@@ -68,6 +99,7 @@ func (e *Engine) HandleRequest(ev events.RequestEvent) events.RequestResult {
 			L.SetField(tbl, "headers", hTbl)
 			return tbl
 		})
+		e.emitLogs(p)
 		if err != nil {
 			logger.Error("plugin %s: on_request: %v", p.name, err)
 			continue
@@ -135,6 +167,9 @@ func (e *Engine) ObserveResponse(ev events.ResponseEvent) {
 	respHeaders := ev.RespHeaders
 
 	for _, p := range e.plugins {
+		if !p.enabled.Load() {
+			continue
+		}
 		if !p.has("on_response") {
 			continue
 		}
@@ -164,6 +199,7 @@ func (e *Engine) ObserveResponse(ev events.ResponseEvent) {
 			L.SetField(tbl, "resp_headers", rpH)
 			return tbl
 		})
+		e.emitLogs(p)
 		if err != nil {
 			logger.Error("plugin %s: on_response: %v", p.name, err)
 		}
@@ -184,6 +220,9 @@ func (e *Engine) ObserveWebSocketFrame(ev events.WebSocketFrameEvent) events.Web
 	payloadSnap := string(ev.Payload)
 
 	for _, p := range e.plugins {
+		if !p.enabled.Load() {
+			continue
+		}
 		if !p.has("on_websocket_frame") {
 			continue
 		}
@@ -196,6 +235,7 @@ func (e *Engine) ObserveWebSocketFrame(ev events.WebSocketFrameEvent) events.Web
 			L.SetField(tbl, "payload", lua.LString(payloadSnap))
 			return tbl
 		})
+		e.emitLogs(p)
 		if err != nil {
 			logger.Error("plugin %s: on_websocket_frame: %v", p.name, err)
 			continue
@@ -213,6 +253,18 @@ func (e *Engine) ObserveWebSocketFrame(ev events.WebSocketFrameEvent) events.Web
 	}
 
 	return events.WebSocketFrameResult{Payload: payload}
+}
+
+// ObservePluginEnabled implements events.PluginEnabledObserver.
+// Toggles the in-memory enabled flag for the named plugin so the change
+// takes effect immediately for all subsequent hook calls.
+func (e *Engine) ObservePluginEnabled(ev events.SetPluginEnabledEvent) {
+	for _, p := range e.plugins {
+		if p.name == ev.Name {
+			p.enabled.Store(ev.Enabled)
+			return
+		}
+	}
 }
 
 // Close shuts down all plugin VMs.

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	lua "github.com/yuin/gopher-lua"
@@ -23,6 +24,16 @@ type Plugin struct {
 	path string
 	L    *lua.LState
 	mu   sync.Mutex
+
+	// enabled controls whether this plugin's hooks are called.
+	// Uses atomic.Bool so the engine can check it without acquiring mu.
+	enabled atomic.Bool
+
+	// logBuf accumulates log() calls made during a Lua hook execution.
+	// Written only while mu is held (log() can only be called from within
+	// a Lua hook, which always runs under mu). Drained by the engine after
+	// each hook call via drainLogs, which also acquires mu.
+	logBuf []string
 }
 
 // load reads the Lua file, registers the full API, executes the script,
@@ -35,9 +46,15 @@ func load(path string, st *store.Store) (*Plugin, error) {
 	})
 
 	p := &Plugin{name: name, path: path, L: L}
+	p.enabled.Store(true)
 
 	// Register API before executing the script so on_load can use it.
-	registerAPI(L, st)
+	// The logFn closure appends to p.logBuf. It is safe without acquiring
+	// mu because log() is only ever invoked from within a Lua hook, which
+	// always runs under mu via callNoReturn or callWithBuilder.
+	registerAPI(L, st, func(msg string) {
+		p.logBuf = append(p.logBuf, msg)
+	})
 
 	if err := L.DoFile(path); err != nil {
 		L.Close()
@@ -121,6 +138,20 @@ func (p *Plugin) callWithBuilder(fn string, builder func(L *lua.LState) *lua.LTa
 		return tbl, nil
 	}
 	return nil, nil
+}
+
+// drainLogs returns all buffered log lines and clears the buffer.
+// Called by the engine after each hook invocation so log lines can be
+// emitted onto the bus. Acquires mu independently of the hook call.
+func (p *Plugin) drainLogs() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if len(p.logBuf) == 0 {
+		return nil
+	}
+	lines := p.logBuf
+	p.logBuf = nil
+	return lines
 }
 
 // close shuts down the Lua VM.

@@ -86,3 +86,19 @@ type WebSocketFrameEvent struct {
 	Opcode       WebSocketOpcode
 	Payload      []byte
 }
+
+// PluginLogEvent is emitted by the plugin engine when a Lua plugin calls
+// log(). The store observes it, buffers the line in memory, and notifies
+// the UI via the PluginEntries channel.
+type PluginLogEvent struct {
+	Name    string // plugin filename (e.g. "myplugin.lua")
+	Message string
+}
+
+// SetPluginEnabledEvent is emitted by the UI when the user toggles a plugin.
+// The engine observes it to skip or include that plugin's hooks.
+// The store observes it to persist the new state to the database.
+type SetPluginEnabledEvent struct {
+	Name    string // plugin filename
+	Enabled bool
+}

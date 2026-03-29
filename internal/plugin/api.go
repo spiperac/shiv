@@ -8,24 +8,25 @@ import (
 
 	lua "github.com/yuin/gopher-lua"
 
-	"github.com/shiv/internal/logger"
 	"github.com/shiv/internal/store"
 )
 
 // registerAPI registers all Lua API namespaces on the given VM.
+// logFn is called when the Lua script calls log() — the engine routes
+// these lines onto the bus after each hook call.
 // Called once per plugin at load time.
-func registerAPI(L *lua.LState, st *store.Store) {
-	registerLog(L)
+func registerAPI(L *lua.LState, st *store.Store, logFn func(string)) {
+	registerLog(L, logFn)
 	registerHTTPClient(L)
 	registerDB(L, st)
 }
 
 // ── log ───────────────────────────────────────────────────────────────────────
 
-func registerLog(L *lua.LState) {
+func registerLog(L *lua.LState, logFn func(string)) {
 	L.SetGlobal("log", L.NewFunction(func(L *lua.LState) int {
 		msg := L.CheckString(1)
-		logger.Info("[plugin] %s", msg)
+		logFn(msg)
 		return 0
 	}))
 }
