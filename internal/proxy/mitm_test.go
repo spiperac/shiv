@@ -22,7 +22,8 @@ import (
 // httptest.NewRecorder does not support hijacking so we need a real listener for CONNECT.
 func startProxyServer(t *testing.T, st *store.Store) string {
 	t.Helper()
-	p := newTestProxy(t, st)
+	bus := newTestBus(t, st)
+	p := newTestProxy(t, bus)
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)

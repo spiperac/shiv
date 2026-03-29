@@ -12,9 +12,9 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/shiv/internal/events"
 	internalhttp "github.com/shiv/internal/http"
 	"github.com/shiv/internal/logger"
-	"github.com/shiv/internal/store"
 )
 
 func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
@@ -122,8 +122,9 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 			p.handleWebSocketTLS(browserTLS, browserReader, req, bareHost, r.Host)
 			return
 		}
-		interceptedReq, reqBody, shouldForward := p.store.Intercept.Hold(req, reqBody)
-		if !shouldForward {
+
+		result := p.bus.EmitRequest(events.RequestEvent{Request: req, Body: reqBody})
+		if result.Drop {
 			resp := &http.Response{
 				Status:        "403 Forbidden",
 				StatusCode:    403,
@@ -139,6 +140,7 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 			}
 			continue
 		}
+		interceptedReq, reqBody := result.Request, result.Body
 
 		outReq, err := http.NewRequest(interceptedReq.Method, interceptedReq.URL.String(), bytes.NewReader(reqBody))
 		if err != nil {
@@ -188,7 +190,7 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 			logBody = nil
 		}
 
-		if err := p.store.Log(store.Transaction{
+		p.bus.EmitResponse(events.ResponseEvent{
 			Timestamp:   start,
 			Host:        r.Host,
 			Proto:       "HTTP/1.1",
@@ -201,9 +203,6 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 			RespBody:    logBody,
 			DurationMs:  elapsed,
 			TLS:         true,
-			InScope:     p.store.InScope(r.Host),
-		}); err != nil {
-			logger.Error("mitm: store transaction for %s: %v", bareHost, err)
-		}
+		})
 	}
 }

@@ -128,7 +128,6 @@ func (l *lootTab) build() fyne.CanvasObject {
 							logger.Error("loot: delete: %v", err)
 							return
 						}
-						l.reload()
 						l.selectedIdx = -1
 						l.deleteBtn.Disable()
 						l.notesArea.SetText("")
@@ -165,7 +164,6 @@ func (l *lootTab) build() fyne.CanvasObject {
 				logger.Error("loot: delete: %v", err)
 				return
 			}
-			l.reload()
 			l.selectedIdx = -1
 			l.deleteBtn.Disable()
 			l.notesArea.SetText("")
@@ -197,6 +195,16 @@ func (l *lootTab) build() fyne.CanvasObject {
 	split.SetOffset(0.6)
 
 	l.reload()
+
+	// Watch for new loot entries added by plugins or other goroutines.
+	go func() {
+		for range l.projectStore.LootEntries {
+			fyne.Do(func() {
+				l.reload()
+			})
+		}
+	}()
+
 	return split
 }
 
@@ -248,7 +256,6 @@ func (l *lootTab) showAddDialog(historyID *uint64, rawRequest string, rawRespons
 				logger.Error("loot: add: %v", err)
 				return
 			}
-			l.reload()
 		}, l.win)
 	closeOnEscape(l.win, d.Dismiss)
 	d.Show()

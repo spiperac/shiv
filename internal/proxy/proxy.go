@@ -10,14 +10,14 @@ import (
 	"time"
 
 	"github.com/shiv/internal/cert"
+	"github.com/shiv/internal/events"
 	internalhttp "github.com/shiv/internal/http"
-	"github.com/shiv/internal/store"
 )
 
 type Proxy struct {
 	addr     string
 	certAuth *cert.CA
-	store    *store.Store
+	bus      *events.Bus
 
 	mu  sync.Mutex
 	srv *http.Server
@@ -25,12 +25,12 @@ type Proxy struct {
 
 const maxBodySize = 10 << 20
 
-func New(addr string, projectStore *store.Store) (*Proxy, error) {
+func New(addr string, bus *events.Bus) (*Proxy, error) {
 	ca, err := cert.Load()
 	if err != nil {
 		return nil, fmt.Errorf("proxy: load CA: %w", err)
 	}
-	return &Proxy{addr: addr, certAuth: ca, store: projectStore}, nil
+	return &Proxy{addr: addr, certAuth: ca, bus: bus}, nil
 }
 
 func (p *Proxy) CA() *cert.CA {
@@ -106,11 +106,12 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	r.Body = io.NopCloser(bytes.NewReader(reqBody))
 
-	interceptedReq, reqBody, shouldForward := p.store.Intercept.Hold(r, reqBody)
-	if !shouldForward {
+	result := p.bus.EmitRequest(events.RequestEvent{Request: r, Body: reqBody})
+	if result.Drop {
 		http.Error(w, "request dropped", http.StatusForbidden)
 		return
 	}
+	interceptedReq, reqBody := result.Request, result.Body
 	interceptedReq.Body = io.NopCloser(bytes.NewReader(reqBody))
 
 	start := time.Now()
@@ -142,7 +143,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		logBody = nil
 	}
 
-	_ = p.store.Log(store.Transaction{
+	p.bus.EmitResponse(events.ResponseEvent{
 		Timestamp:   start,
 		Host:        interceptedReq.Host,
 		Proto:       "HTTP/1.1",
@@ -155,6 +156,5 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		RespBody:    logBody,
 		DurationMs:  elapsed,
 		TLS:         false,
-		InScope:     p.store.InScope(interceptedReq.Host),
 	})
 }

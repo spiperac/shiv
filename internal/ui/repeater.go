@@ -1,9 +1,11 @@
 package ui
 
 import (
+	"bytes"
 	"crypto/tls"
 	"fmt"
 	"net"
+	"net/http"
 	"strings"
 	"time"
 
@@ -15,6 +17,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
+	"github.com/shiv/internal/events"
 	internalhttp "github.com/shiv/internal/http"
 	"github.com/shiv/internal/logger"
 	"github.com/shiv/internal/store"
@@ -23,6 +26,7 @@ import (
 
 type repeaterTab struct {
 	projectStore *store.Store
+	bus          *events.Bus
 	loot         *lootTab
 	tabs         *container.DocTabs
 	win          fyne.Window
@@ -31,9 +35,10 @@ type repeaterTab struct {
 	loadFns      map[*container.TabItem]func()
 }
 
-func newRepeaterTab(projectStore *store.Store, win fyne.Window) *repeaterTab {
+func newRepeaterTab(projectStore *store.Store, bus *events.Bus, win fyne.Window) *repeaterTab {
 	return &repeaterTab{
 		projectStore: projectStore,
+		bus:          bus,
 		win:          win,
 		tabIDs:       make(map[*container.TabItem]int64),
 		sendFns:      make(map[*container.TabItem]func()),
@@ -67,12 +72,9 @@ func (r *repeaterTab) build() fyne.CanvasObject {
 
 	r.tabs.CreateTab = func() *container.TabItem {
 		saved := store.RepeaterTab{
-			Name:       "New Tab",
-			Host:       "",
-			Port:       443,
-			TLS:        false,
-			TabType:    "http",
-			RawRequest: "",
+			Name:    "New Tab",
+			Port:    443,
+			TabType: "http",
 		}
 		id, err := r.projectStore.SaveRepeaterTab(saved)
 		if err != nil {
@@ -125,7 +127,6 @@ func (r *repeaterTab) AddWSTab(name, wsURL string, useTLS bool) {
 	saved := store.RepeaterTab{
 		Name:       name,
 		Host:       wsURL,
-		Port:       0,
 		TLS:        useTLS,
 		TabType:    "websocket",
 		RawRequest: wsURL,
@@ -167,20 +168,17 @@ func (r *repeaterTab) buildHTTPTabItem(tab store.RepeaterTab) *container.TabItem
 	cookieJar := make(map[string]string)
 
 	inspectBtn := widget.NewButtonWithIcon("Inspector", AppIcon("inspector"), func() {
-		respHeaders := internalhttp.ParseRawHeaders(lastRawResponse)
-		lastTx := store.Transaction{
-			RespHeaders: respHeaders,
+		showInspectorDialog(store.Transaction{
+			RespHeaders: internalhttp.ParseRawHeaders(lastRawResponse),
 			RespBody:    lastRespBody,
-		}
-		showInspectorDialog(lastTx, r.win)
+		}, r.win)
 	})
 	inspectBtn.Disable()
 
 	sendToLootBtn := widget.NewButtonWithIcon("Loot", AppIcon("loot"), func() {
-		if r.loot == nil {
-			return
+		if r.loot != nil {
+			r.loot.showAddDialog(nil, lastRawRequest, lastRawResponse)
 		}
-		r.loot.showAddDialog(nil, lastRawRequest, lastRawResponse)
 	})
 	sendToLootBtn.Disable()
 
@@ -199,13 +197,86 @@ func (r *repeaterTab) buildHTTPTabItem(tab store.RepeaterTab) *container.TabItem
 
 		sendBtn.Disable()
 		go func() {
-			result, err := internalhttp.SendRaw(internalhttp.RawRequestOptions{
+			start := time.Now()
+			scheme := "http"
+			if useTLS {
+				scheme = "https"
+			}
+			addr := fmt.Sprintf("%s:%d", host, port)
+
+			// normalizeRaw ensures CRLF in headers before any parsing.
+			// SendRaw does the same internally — we must match it here so
+			// that our header/body split is consistent with what it sends.
+			normalized := normalizeRaw(rawReq)
+			headerSection, rawBody := splitRaw(normalized)
+			rawMethod := internalhttp.ExtractMethod(normalized)
+			rawPath := internalhttp.ExtractURL(normalized)
+
+			// finalRawReq is what we pass to SendRaw. It starts as the
+			// normalized original and is replaced only if a plugin modifies it.
+			finalRawReq := normalized
+
+			// busOK gates EmitResponse — only emit if we successfully built
+			// the bus request and the send succeeded.
+			busOK := false
+			var emitReq *http.Request
+			var emitBody []byte
+
+			if r.bus != nil {
+				busReq, err := http.NewRequest(rawMethod, fmt.Sprintf("%s://%s%s", scheme, addr, rawPath), nil)
+				if err == nil {
+					busReq.Header = internalhttp.ParseRawHeaders(headerSection)
+
+					result := r.bus.EmitRequest(events.RequestEvent{
+						Request: busReq,
+						Body:    rawBody,
+					})
+
+					if result.Drop {
+						fyne.Do(func() {
+							sendBtn.Enable()
+							respLabel.SetText("HTTP/1.1 403 Forbidden\r\n\r\nrequest dropped by plugin")
+						})
+						return
+					}
+
+					// Apply only what the plugin actually changed back onto
+					// the normalized raw string. SendRaw owns Content-Length,
+					// Connection, and Accept-Encoding — we never touch those.
+					finalRawReq = patchRaw(normalized, headerSection, rawBody, rawMethod, rawPath, result)
+					emitReq = result.Request
+					emitBody = result.Body
+					busOK = true
+				}
+			}
+
+			sendResult, err := internalhttp.SendRaw(internalhttp.RawRequestOptions{
 				Host:      host,
 				Port:      port,
 				TLS:       useTLS,
-				RawReq:    rawReq,
+				RawReq:    finalRawReq,
 				CookieJar: cookieJar,
 			})
+
+			elapsed := time.Since(start).Milliseconds()
+
+			if err == nil && busOK {
+				r.bus.EmitResponse(events.ResponseEvent{
+					Timestamp:   start,
+					Host:        addr,
+					Proto:       "HTTP/1.1",
+					Method:      emitReq.Method,
+					URL:         emitReq.URL.String(),
+					ReqHeaders:  emitReq.Header,
+					ReqBody:     emitBody,
+					StatusCode:  sendResult.StatusCode,
+					RespHeaders: internalhttp.ParseRawHeaders(sendResult.Raw),
+					RespBody:    sendResult.Body,
+					DurationMs:  elapsed,
+					TLS:         useTLS,
+				})
+			}
+
 			fyne.Do(func() {
 				sendBtn.Enable()
 				if err != nil {
@@ -213,17 +284,17 @@ func (r *repeaterTab) buildHTTPTabItem(tab store.RepeaterTab) *container.TabItem
 					logger.Error("repeater: send: %v", err)
 					return
 				}
-				respLabel.SetText(result.Raw)
-				for _, c := range result.Cookies {
+				respLabel.SetText(sendResult.Raw)
+				for _, c := range sendResult.Cookies {
 					cookieJar[c.Name] = c.Value
 				}
 				lastRawRequest = rawReq
-				lastRawResponse = result.Raw
-				lastRespBody = result.Body
+				lastRawResponse = sendResult.Raw
+				lastRespBody = sendResult.Body
 				r.updateTabName(rawReq, tabID)
 				inspectBtn.Enable()
 				sendToLootBtn.Enable()
-				if saveErr := r.projectStore.UpdateRepeaterTab(tabID, rawReq, result.Raw); saveErr != nil {
+				if saveErr := r.projectStore.UpdateRepeaterTab(tabID, rawReq, sendResult.Raw); saveErr != nil {
 					logger.Error("repeater: update tab: %v", saveErr)
 				}
 			})
@@ -270,6 +341,88 @@ func (r *repeaterTab) buildHTTPTabItem(tab store.RepeaterTab) *container.TabItem
 	return tabItem
 }
 
+// ── Raw request helpers ───────────────────────────────────────────────────────
+
+// normalizeRaw ensures CRLF line endings in the header section only.
+// Mirrors SendRaw's internal normalizeLineEndings so our parsing is consistent
+// with what actually goes on the wire.
+func normalizeRaw(raw string) string {
+	headerSection, body := splitRaw(raw)
+	headerSection = strings.ReplaceAll(headerSection, "\r\n", "\n")
+	headerSection = strings.ReplaceAll(headerSection, "\n", "\r\n")
+	return headerSection + "\r\n\r\n" + string(body)
+}
+
+// splitRaw splits a raw HTTP request into its header section and body.
+// Handles both CRLF and LF delimiters. The returned header section does
+// not include the blank line separator.
+func splitRaw(raw string) (headerSection string, body []byte) {
+	if idx := strings.Index(raw, "\r\n\r\n"); idx >= 0 {
+		return raw[:idx], []byte(raw[idx+4:])
+	}
+	if idx := strings.Index(raw, "\n\n"); idx >= 0 {
+		return raw[:idx], []byte(raw[idx+2:])
+	}
+	return raw, nil
+}
+
+// patchRaw applies plugin modifications surgically to the normalized raw
+// request string. Only fields the plugin actually changed are rewritten.
+// SendRaw owns Content-Length, Connection, and Accept-Encoding — we leave
+// those untouched so its internal rewriteHeaders handles them correctly.
+func patchRaw(raw, headerSection string, origBody []byte, origMethod, origPath string, result events.RequestResult) string {
+	lines := strings.Split(headerSection, "\r\n")
+	if len(lines) == 0 {
+		return raw
+	}
+
+	// Rewrite request line only if method or path actually changed.
+	newMethod := result.Request.Method
+	newPath := result.Request.URL.RequestURI()
+	if newMethod == "" {
+		newMethod = origMethod
+	}
+	if newPath == "" || newPath == "?" {
+		newPath = origPath
+	}
+	if newMethod != origMethod || newPath != origPath {
+		lines[0] = fmt.Sprintf("%s %s HTTP/1.1", newMethod, newPath)
+	}
+
+	// Apply header changes: update existing headers in-place (preserving
+	// original casing and order), append new ones at the end.
+	for pluginKey, pluginVals := range result.Request.Header {
+		if len(pluginVals) == 0 {
+			continue
+		}
+		pluginVal := strings.Join(pluginVals, ", ")
+		found := false
+		for i := 1; i < len(lines); i++ {
+			if lines[i] == "" {
+				break
+			}
+			parts := strings.SplitN(lines[i], ": ", 2)
+			if len(parts) == 2 && strings.EqualFold(parts[0], pluginKey) {
+				lines[i] = parts[0] + ": " + pluginVal
+				found = true
+				break
+			}
+		}
+		if !found {
+			lines = append(lines, pluginKey+": "+pluginVal)
+		}
+	}
+
+	// Replace body only if the plugin actually changed it.
+	_, body := splitRaw(raw)
+	finalBody := body
+	if !bytes.Equal(result.Body, origBody) {
+		finalBody = result.Body
+	}
+
+	return strings.Join(lines, "\r\n") + "\r\n\r\n" + string(finalBody)
+}
+
 // ── WebSocket tab ─────────────────────────────────────────────────────────────
 
 type wsConnState int
@@ -283,20 +436,14 @@ const (
 func (r *repeaterTab) buildWSTabItem(tab store.RepeaterTab) *container.TabItem {
 	tabID := tab.ID
 
-	// ── connection state ──────────────────────────────────────────────────────
-
 	var wsConn *websocket.Conn
 	var connState wsConnState
-
-	// ── URL entry ─────────────────────────────────────────────────────────────
 
 	urlEntry := widget.NewEntry()
 	urlEntry.SetPlaceHolder("wss://host:port/path")
 	if tab.RawRequest != "" {
 		urlEntry.SetText(tab.RawRequest)
 	}
-
-	// ── frame list ────────────────────────────────────────────────────────────
 
 	type wsFrame struct {
 		direction string
@@ -341,13 +488,9 @@ func (r *repeaterTab) buildWSTabItem(tab store.RepeaterTab) *container.TabItem {
 		return widget.SuccessImportance
 	}
 
-	// ── payload entry ─────────────────────────────────────────────────────────
-
 	payloadEntry := widget.NewMultiLineEntry()
 	payloadEntry.SetPlaceHolder("Message to send...")
 	payloadEntry.SetMinRowsVisible(3)
-
-	// ── connect/disconnect button ─────────────────────────────────────────────
 
 	connectBtn := widget.NewButtonWithIcon("Connect", AppIcon("web"), nil)
 	connectBtn.Importance = widget.HighImportance
@@ -390,7 +533,6 @@ func (r *repeaterTab) buildWSTabItem(tab store.RepeaterTab) *container.TabItem {
 		updateConnectBtn()
 	}
 
-	// readLoop runs in a goroutine, receiving frames and updating the UI.
 	startReadLoop := func(conn *websocket.Conn) {
 		go func() {
 			for {
@@ -398,7 +540,6 @@ func (r *repeaterTab) buildWSTabItem(tab store.RepeaterTab) *container.TabItem {
 				if err != nil {
 					fyne.Do(func() {
 						if wsConn == conn {
-							// Connection dropped — update state.
 							wsConn = nil
 							connState = wsDisconnected
 							updateConnectBtn()
@@ -412,11 +553,7 @@ func (r *repeaterTab) buildWSTabItem(tab store.RepeaterTab) *container.TabItem {
 					})
 					return
 				}
-				f := wsFrame{
-					direction: "← Recv",
-					payload:   string(payload),
-					ts:        time.Now(),
-				}
+				f := wsFrame{direction: "← Recv", payload: string(payload), ts: time.Now()}
 				fyne.Do(func() {
 					frames = append(frames, f)
 					frameTable.Refresh()
@@ -431,50 +568,35 @@ func (r *repeaterTab) buildWSTabItem(tab store.RepeaterTab) *container.TabItem {
 			disconnect()
 			return
 		}
-
 		rawURL := strings.TrimSpace(urlEntry.Text)
 		if rawURL == "" {
 			return
 		}
-
 		connState = wsConnecting
 		updateConnectBtn()
-
-		// Persist the URL.
 		_ = r.projectStore.UpdateRepeaterTab(tabID, rawURL, "")
 
 		go func() {
 			dialer := websocket.Dialer{
-				TLSClientConfig: &tls.Config{
-					InsecureSkipVerify: true, //nolint:gosec
-				},
+				TLSClientConfig:  &tls.Config{InsecureSkipVerify: true}, //nolint:gosec
 				HandshakeTimeout: 10 * time.Second,
 				NetDial: func(network, addr string) (net.Conn, error) {
 					return net.DialTimeout(network, addr, 10*time.Second)
 				},
 			}
-
 			conn, _, err := dialer.Dial(rawURL, nil)
 			fyne.Do(func() {
 				if err != nil {
 					connState = wsDisconnected
 					updateConnectBtn()
-					frames = append(frames, wsFrame{
-						direction: "⚠ Error",
-						payload:   err.Error(),
-						ts:        time.Now(),
-					})
+					frames = append(frames, wsFrame{direction: "⚠ Error", payload: err.Error(), ts: time.Now()})
 					frameTable.Refresh()
 					return
 				}
 				wsConn = conn
 				connState = wsConnected
 				updateConnectBtn()
-				frames = append(frames, wsFrame{
-					direction: "✓ Connected",
-					payload:   rawURL,
-					ts:        time.Now(),
-				})
+				frames = append(frames, wsFrame{direction: "✓ Connected", payload: rawURL, ts: time.Now()})
 				frameTable.Refresh()
 				startReadLoop(conn)
 			})
@@ -494,26 +616,16 @@ func (r *repeaterTab) buildWSTabItem(tab store.RepeaterTab) *container.TabItem {
 			err := conn.WriteMessage(websocket.TextMessage, []byte(payload))
 			fyne.Do(func() {
 				if err != nil {
-					frames = append(frames, wsFrame{
-						direction: "⚠ Error",
-						payload:   "send failed: " + err.Error(),
-						ts:        time.Now(),
-					})
+					frames = append(frames, wsFrame{direction: "⚠ Error", payload: "send failed: " + err.Error(), ts: time.Now()})
 					frameTable.Refresh()
 					return
 				}
-				frames = append(frames, wsFrame{
-					direction: "→ Sent",
-					payload:   payload,
-					ts:        time.Now(),
-				})
+				frames = append(frames, wsFrame{direction: "→ Sent", payload: payload, ts: time.Now()})
 				frameTable.Refresh()
 				frameTable.ScrollToRow(len(frames) - 1)
 			})
 		}()
 	}
-
-	// ── layout ────────────────────────────────────────────────────────────────
 
 	toolbar := container.NewBorder(nil, nil,
 		container.NewHBox(connectBtn, clearBtn),
@@ -521,11 +633,7 @@ func (r *repeaterTab) buildWSTabItem(tab store.RepeaterTab) *container.TabItem {
 		urlEntry,
 	)
 
-	sendBar := container.NewBorder(nil, nil, nil,
-		sendFrameBtn,
-		payloadEntry,
-	)
-
+	sendBar := container.NewBorder(nil, nil, nil, sendFrameBtn, payloadEntry)
 	framePane := container.NewBorder(newBoldLabel("Frames"), nil, nil, nil, frameTable.Build())
 
 	content := container.NewBorder(
@@ -537,12 +645,6 @@ func (r *repeaterTab) buildWSTabItem(tab store.RepeaterTab) *container.TabItem {
 
 	tabItem := container.NewTabItem(tab.Name, content)
 	r.tabIDs[tabItem] = tabID
-
-	// Close the WS connection if the tab is closed.
-	origClose := r.tabs.OnClosed
-	_ = origClose // OnClosed is set globally on the DocTabs, not per-tab.
-	// Disconnection is handled in closeTab via the tabIDs map being cleaned up.
-	// We register a loadFn that is a no-op for WS tabs (no lazy content to load).
 	r.loadFns[tabItem] = func() {}
 
 	return tabItem

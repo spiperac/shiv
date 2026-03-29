@@ -3,6 +3,8 @@ package store
 import (
 	"net/http"
 	"sync"
+
+	"github.com/shiv/internal/events"
 )
 
 // PendingRequest is a request held at the intercept gate waiting for a
@@ -66,7 +68,7 @@ type InterceptGate struct {
 
 	bypassMu     sync.Mutex
 	bypass       chan struct{} // closed to release all waiting goroutines
-	bypassClosed bool          // tracks whether current bypass is already closed
+	bypassClosed bool         // tracks whether current bypass is already closed
 }
 
 // NewInterceptGate creates a new gate. Intercept is off by default.
@@ -185,4 +187,15 @@ func (g *InterceptGate) ForwardAll() {
 // Queue returns the channel the UI reads pending requests from.
 func (g *InterceptGate) Queue() <-chan *PendingRequest {
 	return g.queue
+}
+
+// HandleRequest implements events.RequestMiddleware.
+// This is a thin adapter: it calls Hold and maps the result to RequestResult.
+func (g *InterceptGate) HandleRequest(e events.RequestEvent) events.RequestResult {
+	req, body, forward := g.Hold(e.Request, e.Body)
+	return events.RequestResult{
+		Drop:    !forward,
+		Request: req,
+		Body:    body,
+	}
 }

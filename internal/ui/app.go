@@ -11,6 +11,7 @@ import (
 	"fyne.io/fyne/v2/widget"
 
 	"github.com/shiv/assets"
+	"github.com/shiv/internal/events"
 	"github.com/shiv/internal/proxy"
 	"github.com/shiv/internal/store"
 )
@@ -70,7 +71,7 @@ func setProxyStatus(prefs fyne.Preferences, running bool) {
 	}
 }
 
-func ShowMainWindow(fyneApp fyne.App, projectStore *store.Store, proxyServer *proxy.Proxy, launchWin fyne.Window) {
+func ShowMainWindow(fyneApp fyne.App, projectStore *store.Store, proxyServer *proxy.Proxy, bus *events.Bus, launchWin fyne.Window) {
 	prefs := fyneApp.Preferences()
 
 	mainWin := fyneApp.NewWindow("Shiv")
@@ -127,7 +128,7 @@ func ShowMainWindow(fyneApp fyne.App, projectStore *store.Store, proxyServer *pr
 	appName := widget.NewLabel("Shiv")
 	appName.TextStyle = fyne.TextStyle{Bold: true}
 
-	repeater := newRepeaterTab(projectStore, mainWin)
+	repeater := newRepeaterTab(projectStore, bus, mainWin)
 	loot := newLootTab(projectStore, mainWin, repeater)
 	repeater.loot = loot
 	intruder := newIntruderTab(mainWin, projectStore, repeater, loot)

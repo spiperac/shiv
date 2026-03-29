@@ -11,11 +11,9 @@ import (
 
 	"github.com/gorilla/websocket"
 
+	"github.com/shiv/internal/events"
 	"github.com/shiv/internal/logger"
-	"github.com/shiv/internal/store"
 )
-
-const wsFrameSizeLimit = 1 << 20 // 1 MB per frame
 
 // isWebSocketUpgrade returns true if the request is a WebSocket upgrade.
 func isWebSocketUpgrade(req *http.Request) bool {
@@ -99,8 +97,8 @@ func (p *Proxy) handleWebSocketTLS(
 	hw := newHijackWriter(tlsConn, browserReader)
 	upgrader := websocket.Upgrader{
 		CheckOrigin:     func(r *http.Request) bool { return true },
-		ReadBufferSize:  wsFrameSizeLimit,
-		WriteBufferSize: wsFrameSizeLimit,
+		ReadBufferSize:  1 << 20,
+		WriteBufferSize: 1 << 20,
 	}
 	browserConn, err := upgrader.Upgrade(hw, req, responseHeader)
 	if err != nil {
@@ -109,18 +107,14 @@ func (p *Proxy) handleWebSocketTLS(
 	}
 	defer browserConn.Close()
 
-	// ── 3. Log connection ─────────────────────────────────────────────────────
+	// ── 3. Emit connection event ──────────────────────────────────────────────
 
-	connID, err := p.store.LogWebSocketConnection(store.WebSocketConnection{
+	connID := p.bus.EmitWebSocketConnection(events.WebSocketConnectionEvent{
 		Host:      hostWithPort,
 		URL:       upstreamURL.String(),
 		TLS:       true,
-		InScope:   p.store.InScope(hostWithPort),
 		Timestamp: time.Now(),
 	})
-	if err != nil {
-		logger.Error("ws: log connection for %s: %v", bareHost, err)
-	}
 
 	logger.Info("ws: connected %s%s", bareHost, req.URL.Path)
 
@@ -138,7 +132,13 @@ func (p *Proxy) handleWebSocketTLS(
 				}
 				return
 			}
-			p.logWSFrame(connID, store.WebSocketClient, msgType, payload)
+			p.bus.EmitWebSocketFrame(events.WebSocketFrameEvent{
+				ConnectionID: connID,
+				Timestamp:    time.Now(),
+				Direction:    events.WebSocketClient,
+				Opcode:       events.WebSocketOpcode(msgType),
+				Payload:      payload,
+			})
 			if err := upstreamConn.WriteMessage(msgType, payload); err != nil {
 				logger.Debug("ws: browser→upstream write for %s: %v", bareHost, err)
 				return
@@ -156,7 +156,13 @@ func (p *Proxy) handleWebSocketTLS(
 				}
 				return
 			}
-			p.logWSFrame(connID, store.WebSocketServer, msgType, payload)
+			p.bus.EmitWebSocketFrame(events.WebSocketFrameEvent{
+				ConnectionID: connID,
+				Timestamp:    time.Now(),
+				Direction:    events.WebSocketServer,
+				Opcode:       events.WebSocketOpcode(msgType),
+				Payload:      payload,
+			})
 			if err := browserConn.WriteMessage(msgType, payload); err != nil {
 				logger.Debug("ws: upstream→browser write for %s: %v", bareHost, err)
 				return
@@ -166,27 +172,6 @@ func (p *Proxy) handleWebSocketTLS(
 
 	<-done
 	logger.Info("ws: closed %s%s", bareHost, req.URL.Path)
-}
-
-// logWSFrame logs a single WebSocket frame, truncating oversized payloads.
-func (p *Proxy) logWSFrame(connID uint64, dir store.WebSocketDirection, msgType int, payload []byte) {
-	if connID == 0 {
-		return
-	}
-	if len(payload) > wsFrameSizeLimit {
-		truncated := make([]byte, wsFrameSizeLimit)
-		copy(truncated, payload[:wsFrameSizeLimit])
-		payload = truncated
-	}
-	if err := p.store.LogWebSocketFrame(store.WebSocketFrame{
-		ConnectionID: connID,
-		Timestamp:    time.Now(),
-		Direction:    dir,
-		Opcode:       store.WebSocketOpcode(msgType),
-		Payload:      payload,
-	}); err != nil {
-		logger.Error("ws: log frame: %v", err)
-	}
 }
 
 // writeWSError writes a minimal HTTP error response directly to a raw conn.

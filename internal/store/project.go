@@ -16,6 +16,7 @@ type Store struct {
 	Intercept            *InterceptGate
 	WebSocketConnections chan WebSocketConnection
 	WebSocketFrames      chan WebSocketFrame
+	LootEntries          chan struct{}
 }
 
 func Open(path string) (*Store, error) {
@@ -33,6 +34,7 @@ func Open(path string) (*Store, error) {
 		Intercept:            NewInterceptGate(),
 		WebSocketConnections: make(chan WebSocketConnection, 256),
 		WebSocketFrames:      make(chan WebSocketFrame, 256),
+		LootEntries:          make(chan struct{}, 256),
 	}
 	if err := projectStore.migrate(); err != nil {
 		db.Close()
@@ -48,6 +50,7 @@ func (s *Store) Close() error {
 	close(s.Updates)
 	close(s.WebSocketConnections)
 	close(s.WebSocketFrames)
+	close(s.LootEntries)
 	close(s.Intercept.queue)
 	return s.db.Close()
 }

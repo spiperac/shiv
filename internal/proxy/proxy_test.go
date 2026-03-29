@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/shiv/internal/events"
 	"github.com/shiv/internal/proxy"
 	"github.com/shiv/internal/store"
 	"github.com/stretchr/testify/assert"
@@ -28,12 +29,21 @@ func newTestStore(t *testing.T) *store.Store {
 	return projectStore
 }
 
-// newTestProxy creates a Proxy and an upstream httptest.Server it can forward to.
+// newTestBus creates a bus wired to the given store — mirrors production wiring.
+func newTestBus(t *testing.T, st *store.Store) *events.Bus {
+	t.Helper()
+	bus := events.NewBus()
+	bus.Register(st.Intercept)
+	bus.Register(st)
+	return bus
+}
+
+// newTestProxy creates a Proxy wired to an events.Bus.
 // The proxy is wired as an http.Handler so we can call it via httptest without
 // binding a real port.
-func newTestProxy(t *testing.T, st *store.Store) *proxy.Proxy {
+func newTestProxy(t *testing.T, bus *events.Bus) *proxy.Proxy {
 	t.Helper()
-	p, err := proxy.New("127.0.0.1:0", st)
+	p, err := proxy.New("127.0.0.1:0", bus)
 	require.NoError(t, err)
 	return p
 }
@@ -54,7 +64,7 @@ func upstreamServer(t *testing.T, status int, body string) *httptest.Server {
 func TestServeHTTP_ForwardsRequestAndReturnsResponse(t *testing.T) {
 	st := newTestStore(t)
 	upstream := upstreamServer(t, http.StatusOK, "hello proxy")
-	p := newTestProxy(t, st)
+	p := newTestProxy(t, newTestBus(t, st))
 
 	req := httptest.NewRequest(http.MethodGet, upstream.URL+"/test", nil)
 	req.RequestURI = upstream.URL + "/test"
@@ -77,7 +87,7 @@ func TestServeHTTP_ForwardsPostWithBody(t *testing.T) {
 	}))
 	t.Cleanup(upstream.Close)
 
-	p := newTestProxy(t, st)
+	p := newTestProxy(t, newTestBus(t, st))
 	body := `{"name":"test"}`
 	req := httptest.NewRequest(http.MethodPost, upstream.URL+"/api", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -92,7 +102,7 @@ func TestServeHTTP_ForwardsPostWithBody(t *testing.T) {
 func TestServeHTTP_LogsTransactionToStore(t *testing.T) {
 	st := newTestStore(t)
 	upstream := upstreamServer(t, http.StatusOK, "logged")
-	p := newTestProxy(t, st)
+	p := newTestProxy(t, newTestBus(t, st))
 
 	req := httptest.NewRequest(http.MethodGet, upstream.URL+"/logged", nil)
 	w := httptest.NewRecorder()
@@ -101,7 +111,7 @@ func TestServeHTTP_LogsTransactionToStore(t *testing.T) {
 	// Give the store a moment to write (it's async via channel)
 	time.Sleep(50 * time.Millisecond)
 
-	txs, err := st.AllTransactions()
+	txs, err := st.TransactionsPage(0, store.TransactionFilter{ShowOutScope: true})
 	require.NoError(t, err)
 	require.Len(t, txs, 1)
 	assert.Equal(t, "GET", txs[0].Method)
@@ -116,7 +126,7 @@ func TestServeHTTP_ResponseHeadersPassedThrough(t *testing.T) {
 	}))
 	t.Cleanup(upstream.Close)
 
-	p := newTestProxy(t, st)
+	p := newTestProxy(t, newTestBus(t, st))
 	req := httptest.NewRequest(http.MethodGet, upstream.URL, nil)
 	w := httptest.NewRecorder()
 	p.ServeHTTP(w, req)
@@ -133,7 +143,7 @@ func TestServeHTTP_CacheHeadersStripped(t *testing.T) {
 	}))
 	t.Cleanup(upstream.Close)
 
-	p := newTestProxy(t, st)
+	p := newTestProxy(t, newTestBus(t, st))
 	req := httptest.NewRequest(http.MethodGet, upstream.URL, nil)
 	w := httptest.NewRecorder()
 	p.ServeHTTP(w, req)
@@ -144,7 +154,7 @@ func TestServeHTTP_CacheHeadersStripped(t *testing.T) {
 
 func TestServeHTTP_UpstreamError_ReturnsBadGateway(t *testing.T) {
 	st := newTestStore(t)
-	p := newTestProxy(t, st)
+	p := newTestProxy(t, newTestBus(t, st))
 
 	// Point at a port that is not listening
 	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:1/", nil)
@@ -159,7 +169,7 @@ func TestServeHTTP_UpstreamError_ReturnsBadGateway(t *testing.T) {
 func TestServeHTTP_InterceptDrop_ReturnsForbidden(t *testing.T) {
 	st := newTestStore(t)
 	upstream := upstreamServer(t, http.StatusOK, "should not reach")
-	p := newTestProxy(t, st)
+	p := newTestProxy(t, newTestBus(t, st))
 
 	st.Intercept.SetEnabled(true)
 
@@ -186,7 +196,7 @@ func TestServeHTTP_InterceptForward_ModifiedRequest(t *testing.T) {
 	}))
 	t.Cleanup(upstream.Close)
 
-	p := newTestProxy(t, st)
+	p := newTestProxy(t, newTestBus(t, st))
 	st.Intercept.SetEnabled(true)
 
 	go func() {

@@ -9,7 +9,10 @@ require (
 	modernc.org/sqlite v1.46.1
 )
 
-require github.com/kr/text v0.2.0 // indirect
+require (
+	github.com/kr/text v0.2.0 // indirect
+	github.com/yuin/gopher-lua v1.1.1 // indirect
+)
 
 require (
 	fyne.io/systray v1.12.0 // indirect

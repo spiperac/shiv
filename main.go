@@ -13,7 +13,9 @@ import (
 	"fyne.io/fyne/v2/dialog"
 
 	"github.com/shiv/assets"
+	"github.com/shiv/internal/events"
 	"github.com/shiv/internal/logger"
+	"github.com/shiv/internal/plugin"
 	"github.com/shiv/internal/proxy"
 	"github.com/shiv/internal/store"
 	"github.com/shiv/internal/ui"
@@ -61,12 +63,25 @@ func main() {
 			return
 		}
 
+		bus := events.NewBus()
+		bus.Register(projectStore.Intercept)
+		bus.Register(projectStore)
+
 		prefs := fyneApp.Preferences()
+
+		pluginsDir := prefs.StringWithFallback("plugins_dir", fyneApp.Storage().RootURI().Path()+"/plugins")
+		engine, err := plugin.NewEngine(pluginsDir, projectStore)
+		if err != nil {
+			logger.Error("plugin engine: %v", err)
+		} else if engine != nil {
+			bus.Register(engine)
+		}
+
 		proxyAddr := fmt.Sprintf("%s:%d",
 			prefs.StringWithFallback("proxy_host", "127.0.0.1"),
 			prefs.IntWithFallback("proxy_port", 9090),
 		)
-		proxyServer, err := proxy.New(proxyAddr, projectStore)
+		proxyServer, err := proxy.New(proxyAddr, bus)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "[shiv] fatal: %v\n", err)
 			projectStore.Close()
@@ -95,7 +110,7 @@ func main() {
 			}()
 		}
 
-		ui.ShowMainWindow(fyneApp, projectStore, proxyServer, launchWin)
+		ui.ShowMainWindow(fyneApp, projectStore, proxyServer, bus, launchWin)
 	})
 
 	fyneApp.Run()

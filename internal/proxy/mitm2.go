@@ -14,9 +14,9 @@ import (
 
 	"golang.org/x/net/http2"
 
+	"github.com/shiv/internal/events"
 	internalhttp "github.com/shiv/internal/http"
 	"github.com/shiv/internal/logger"
-	"github.com/shiv/internal/store"
 )
 
 const (
@@ -108,12 +108,13 @@ func (p *Proxy) handleConnectH2(browserTLS *tls.Conn, connectReq *http.Request, 
 
 		start := time.Now()
 
-		interceptedReq, reqBody, shouldForward := p.store.Intercept.Hold(req, reqBody)
-		if !shouldForward {
+		result := p.bus.EmitRequest(events.RequestEvent{Request: req, Body: reqBody})
+		if result.Drop {
 			// Stream is dropped by intercept rules; the H2 connection stays alive.
 			http.Error(w, "request dropped", http.StatusForbidden)
 			return
 		}
+		interceptedReq, reqBody := result.Request, result.Body
 
 		streamCtx, cancel := context.WithTimeout(req.Context(), h2StreamRequestTimeout)
 		defer cancel()
@@ -182,7 +183,7 @@ func (p *Proxy) handleConnectH2(browserTLS *tls.Conn, connectReq *http.Request, 
 			logBody = nil
 		}
 
-		if err := p.store.Log(store.Transaction{
+		p.bus.EmitResponse(events.ResponseEvent{
 			Timestamp:   start,
 			Host:        connectReq.Host,
 			Proto:       "HTTP/2",
@@ -195,10 +196,7 @@ func (p *Proxy) handleConnectH2(browserTLS *tls.Conn, connectReq *http.Request, 
 			RespBody:    logBody,
 			DurationMs:  elapsed,
 			TLS:         true,
-			InScope:     p.store.InScope(connectReq.Host),
-		}); err != nil {
-			logger.Error("mitm/h2: store transaction for %s: %v", bareHost, err)
-		}
+		})
 	})
 
 	h2srv := &http2.Server{

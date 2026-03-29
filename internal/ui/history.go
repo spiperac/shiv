@@ -616,15 +616,33 @@ func (h *historyTab) watchUpdates() {
 					return
 				}
 			}
-			h.displayed = append([]store.Transaction{transaction}, h.displayed...)
 			if transaction.ID > h.maxID {
 				h.maxID = transaction.ID
 			}
-			// Keep cursor pointing at the last (oldest) displayed row so
-			// the next page load doesn't skip or duplicate rows.
-			if len(h.displayed) > 0 {
-				h.cursor = h.displayed[len(h.displayed)-1].ID
+
+			// Only prepend if the transaction matches the current filter.
+			f := h.currentFilter()
+			show := true
+			if f.Host != "" && transaction.Host != f.Host {
+				show = false
 			}
+			if show && f.PathPrefix != "" {
+				p := PathOf(transaction.URL)
+				if p != f.PathPrefix && !strings.HasPrefix(p, f.PathPrefix+"/") {
+					show = false
+				}
+			}
+			if show && !f.ShowOutScope && !transaction.InScope {
+				show = false
+			}
+
+			if show {
+				h.displayed = append([]store.Transaction{transaction}, h.displayed...)
+				if len(h.displayed) > 0 {
+					h.cursor = h.displayed[len(h.displayed)-1].ID
+				}
+			}
+
 			isSelected := h.hasSelected && h.selectedTx.ID == transaction.ID
 			if isSelected {
 				h.selectedTx = transaction
@@ -634,7 +652,9 @@ func (h *historyTab) watchUpdates() {
 			// Always add to site map — independent of what's displayed.
 			h.siteMap.add(transaction)
 			h.tree.Refresh()
-			h.table.Refresh()
+			if show {
+				h.table.Refresh()
+			}
 			if isSelected {
 				h.showDetail(transaction)
 			}
@@ -666,26 +686,43 @@ func (h *historyTab) pollMissed() {
 			for _, r := range h.displayed {
 				known[r.ID] = true
 			}
+			f := h.currentFilter()
 			var added bool
 			for _, tx := range txs {
 				if known[tx.ID] {
 					continue
 				}
-				h.displayed = append([]store.Transaction{tx}, h.displayed...)
 				if tx.ID > h.maxID {
 					h.maxID = tx.ID
 				}
-				added = true
+				// Always add to site map regardless of filter.
 				h.siteMap.add(tx)
+
+				show := true
+				if f.Host != "" && tx.Host != f.Host {
+					show = false
+				}
+				if show && f.PathPrefix != "" {
+					p := PathOf(tx.URL)
+					if p != f.PathPrefix && !strings.HasPrefix(p, f.PathPrefix+"/") {
+						show = false
+					}
+				}
+				if show && !f.ShowOutScope && !tx.InScope {
+					show = false
+				}
+				if show {
+					h.displayed = append([]store.Transaction{tx}, h.displayed...)
+					added = true
+				}
 			}
-			// Keep cursor pointing at the last (oldest) displayed row.
 			if added && len(h.displayed) > 0 {
 				h.cursor = h.displayed[len(h.displayed)-1].ID
 			}
 			h.mu.Unlock()
 
+			h.tree.Refresh()
 			if added {
-				h.tree.Refresh()
 				h.table.Refresh()
 			}
 		})

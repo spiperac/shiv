@@ -8,6 +8,7 @@ import (
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/widget"
 
+	"github.com/shiv/internal/events"
 	"github.com/shiv/internal/logger"
 	"github.com/shiv/internal/store"
 	"github.com/shiv/internal/ui/widgets"
@@ -168,7 +169,7 @@ func buildWebSocketContent(projectStore *store.Store, win fyne.Window, repeater 
 		f := filteredFrames[row]
 		switch col {
 		case 0:
-			if f.Direction == store.WebSocketClient {
+			if f.Direction == events.WebSocketClient {
 				return "→ Client"
 			}
 			return "← Server"
@@ -185,7 +186,7 @@ func buildWebSocketContent(projectStore *store.Store, win fyne.Window, repeater 
 		if col != 0 || row >= len(filteredFrames) {
 			return widget.MediumImportance
 		}
-		if filteredFrames[row].Direction == store.WebSocketClient {
+		if filteredFrames[row].Direction == events.WebSocketClient {
 			return widget.HighImportance
 		}
 		return widget.SuccessImportance
@@ -273,12 +274,10 @@ func buildWebSocketContent(projectStore *store.Store, win fyne.Window, repeater 
 
 	// ── live streaming updates ────────────────────────────────────────────────
 
-	// Watch for new connections — prepend to allConns, same as HTTP history.
 	go func() {
 		for conn := range projectStore.WebSocketConnections {
 			c := conn
 			fyne.Do(func() {
-				// Deduplicate by ID in case initial load already has it.
 				for _, existing := range allConns {
 					if existing.ID == c.ID {
 						return
@@ -291,14 +290,10 @@ func buildWebSocketContent(projectStore *store.Store, win fyne.Window, repeater 
 		}
 	}()
 
-	// Watch for new frames — reload from DB for the selected connection.
-	// Appending live frames directly causes ordering and dedup issues;
-	// reloading is correct and fast enough for pentest-scale traffic.
 	go func() {
 		for frame := range projectStore.WebSocketFrames {
 			f := frame
 			fyne.Do(func() {
-				// Always update frame count on the matching connection.
 				for i := range allConns {
 					if allConns[i].ID == f.ConnectionID {
 						allConns[i].FrameCount++
@@ -308,7 +303,6 @@ func buildWebSocketContent(projectStore *store.Store, win fyne.Window, repeater 
 				filteredConns = filterConn(connFilterEntry.Text)
 				connTable.Refresh()
 
-				// Only reload frames if this belongs to the selected connection.
 				if f.ConnectionID != selectedConnID {
 					return
 				}
@@ -394,17 +388,17 @@ func buildWebSocketContent(projectStore *store.Store, win fyne.Window, repeater 
 	return mainSplit
 }
 
-func opcodeLabel(op store.WebSocketOpcode) string {
+func opcodeLabel(op events.WebSocketOpcode) string {
 	switch op {
-	case store.WebSocketText:
+	case events.WebSocketText:
 		return "Text"
-	case store.WebSocketBinary:
+	case events.WebSocketBinary:
 		return "Binary"
-	case store.WebSocketPing:
+	case events.WebSocketPing:
 		return "Ping"
-	case store.WebSocketPong:
+	case events.WebSocketPong:
 		return "Pong"
-	case store.WebSocketClose:
+	case events.WebSocketClose:
 		return "Close"
 	}
 	return fmt.Sprintf("0x%x", int(op))

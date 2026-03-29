@@ -3,34 +3,20 @@ package store
 import (
 	"fmt"
 	"time"
+
+	"github.com/shiv/internal/events"
+	"github.com/shiv/internal/logger"
 )
 
-// WebSocketDirection indicates which side sent the frame.
-type WebSocketDirection int
-
-const (
-	WebSocketClient WebSocketDirection = 0 // browser → server
-	WebSocketServer WebSocketDirection = 1 // server → browser
-)
-
-// WebSocketOpcode mirrors the gorilla/websocket message types.
-type WebSocketOpcode int
-
-const (
-	WebSocketText   WebSocketOpcode = 1
-	WebSocketBinary WebSocketOpcode = 2
-	WebSocketPing   WebSocketOpcode = 9
-	WebSocketPong   WebSocketOpcode = 10
-	WebSocketClose  WebSocketOpcode = 8
-)
+const wsFrameSizeLimit = 1 << 20 // 1 MB per frame
 
 // WebSocketFrame is a single frame captured during a WebSocket session.
 type WebSocketFrame struct {
 	ID           uint64
 	ConnectionID uint64 // foreign key → websocket_connections.id
 	Timestamp    time.Time
-	Direction    WebSocketDirection
-	Opcode       WebSocketOpcode
+	Direction    events.WebSocketDirection
+	Opcode       events.WebSocketOpcode
 	Payload      []byte
 }
 
@@ -172,4 +158,60 @@ func (s *Store) FramesForConnection(connectionID uint64) ([]WebSocketFrame, erro
 		frames = append(frames, f)
 	}
 	return frames, rows.Err()
+}
+
+// ObserveResponse implements events.ResponseObserver.
+// It maps ResponseEvent → store.Transaction, computes InScope, and calls Log.
+func (s *Store) ObserveResponse(e events.ResponseEvent) {
+	_ = s.Log(Transaction{
+		Timestamp:   e.Timestamp,
+		Host:        e.Host,
+		Proto:       e.Proto,
+		Method:      e.Method,
+		URL:         e.URL,
+		ReqHeaders:  e.ReqHeaders,
+		ReqBody:     e.ReqBody,
+		StatusCode:  e.StatusCode,
+		RespHeaders: e.RespHeaders,
+		RespBody:    e.RespBody,
+		DurationMs:  e.DurationMs,
+		TLS:         e.TLS,
+		InScope:     s.InScope(e.Host), // computed here, not in proxy
+	})
+}
+
+// ObserveWebSocketConnection implements events.WebSocketConnectionObserver.
+func (s *Store) ObserveWebSocketConnection(e events.WebSocketConnectionEvent) uint64 {
+	id, err := s.LogWebSocketConnection(WebSocketConnection{
+		Host:      e.Host,
+		URL:       e.URL,
+		TLS:       e.TLS,
+		InScope:   s.InScope(e.Host),
+		Timestamp: e.Timestamp,
+	})
+	if err != nil {
+		logger.Error("store: observe ws connection: %v", err)
+		return 0
+	}
+	return id
+}
+
+// ObserveWebSocketFrame implements events.WebSocketFrameObserver.
+func (s *Store) ObserveWebSocketFrame(e events.WebSocketFrameEvent) {
+	if e.ConnectionID == 0 {
+		return
+	}
+	payload := e.Payload
+	if len(payload) > wsFrameSizeLimit {
+		payload = payload[:wsFrameSizeLimit]
+	}
+	if err := s.LogWebSocketFrame(WebSocketFrame{
+		ConnectionID: e.ConnectionID,
+		Timestamp:    e.Timestamp,
+		Direction:    e.Direction,
+		Opcode:       e.Opcode,
+		Payload:      payload,
+	}); err != nil {
+		logger.Error("store: observe ws frame: %v", err)
+	}
 }

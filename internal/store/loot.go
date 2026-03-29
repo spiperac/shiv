@@ -71,15 +71,33 @@ func (s *Store) AddLoot(entry LootEntry) (int64, error) {
 		id, err = result.LastInsertId()
 		return err
 	})
-	return id, err
+	if err != nil {
+		return 0, err
+	}
+	s.notifyLoot()
+	return id, nil
 }
 
 func (s *Store) DeleteLoot(id int64) error {
-	return s.write(func() error {
+	err := s.write(func() error {
 		_, err := s.db.Exec(`DELETE FROM loot WHERE id = ?`, id)
 		if err != nil {
 			return fmt.Errorf("store: delete loot: %w", err)
 		}
 		return nil
 	})
+	if err != nil {
+		return err
+	}
+	s.notifyLoot()
+	return nil
+}
+
+// notifyLoot signals the UI that loot state has changed.
+// Non-blocking — a full buffer means the UI is already scheduled to reload.
+func (s *Store) notifyLoot() {
+	select {
+	case s.LootEntries <- struct{}{}:
+	default:
+	}
 }

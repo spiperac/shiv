@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/shiv/internal/events"
 	"github.com/shiv/internal/store"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -47,8 +48,8 @@ func TestLogWebSocketFrame_PersistsAllFields(t *testing.T) {
 	frame := store.WebSocketFrame{
 		ConnectionID: connID,
 		Timestamp:    time.Now().UTC().Truncate(time.Second),
-		Direction:    store.WebSocketClient,
-		Opcode:       store.WebSocketText,
+		Direction:    events.WebSocketClient,
+		Opcode:       events.WebSocketText,
 		Payload:      []byte("hello world"),
 	}
 	require.NoError(t, st.LogWebSocketFrame(frame))
@@ -57,8 +58,8 @@ func TestLogWebSocketFrame_PersistsAllFields(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, frames, 1)
 	assert.Equal(t, connID, frames[0].ConnectionID)
-	assert.Equal(t, store.WebSocketClient, frames[0].Direction)
-	assert.Equal(t, store.WebSocketText, frames[0].Opcode)
+	assert.Equal(t, events.WebSocketClient, frames[0].Direction)
+	assert.Equal(t, events.WebSocketText, frames[0].Opcode)
 	assert.Equal(t, []byte("hello world"), frames[0].Payload)
 }
 
@@ -96,8 +97,8 @@ func TestAllWebSocketConnections_FrameCountIsCorrect(t *testing.T) {
 		require.NoError(t, st.LogWebSocketFrame(store.WebSocketFrame{
 			ConnectionID: connID,
 			Timestamp:    time.Now().UTC(),
-			Direction:    store.WebSocketClient,
-			Opcode:       store.WebSocketText,
+			Direction:    events.WebSocketClient,
+			Opcode:       events.WebSocketText,
 			Payload:      []byte("msg"),
 		}))
 	}
@@ -118,17 +119,17 @@ func TestFramesForConnection_OrderedByIDAsc(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	directions := []store.WebSocketDirection{
-		store.WebSocketClient,
-		store.WebSocketServer,
-		store.WebSocketClient,
+	directions := []events.WebSocketDirection{
+		events.WebSocketClient,
+		events.WebSocketServer,
+		events.WebSocketClient,
 	}
 	for _, dir := range directions {
 		require.NoError(t, st.LogWebSocketFrame(store.WebSocketFrame{
 			ConnectionID: connID,
 			Timestamp:    time.Now().UTC(),
 			Direction:    dir,
-			Opcode:       store.WebSocketText,
+			Opcode:       events.WebSocketText,
 			Payload:      []byte("x"),
 		}))
 	}
@@ -136,9 +137,9 @@ func TestFramesForConnection_OrderedByIDAsc(t *testing.T) {
 	frames, err := st.FramesForConnection(connID)
 	require.NoError(t, err)
 	require.Len(t, frames, 3)
-	assert.Equal(t, store.WebSocketClient, frames[0].Direction)
-	assert.Equal(t, store.WebSocketServer, frames[1].Direction)
-	assert.Equal(t, store.WebSocketClient, frames[2].Direction)
+	assert.Equal(t, events.WebSocketClient, frames[0].Direction)
+	assert.Equal(t, events.WebSocketServer, frames[1].Direction)
+	assert.Equal(t, events.WebSocketClient, frames[2].Direction)
 }
 
 func TestFramesForConnection_EmptyForUnknownConnection(t *testing.T) {
@@ -182,8 +183,8 @@ func TestLogWebSocketFrame_EmitsToChannel(t *testing.T) {
 	err = st.LogWebSocketFrame(store.WebSocketFrame{
 		ConnectionID: connID,
 		Timestamp:    time.Now().UTC(),
-		Direction:    store.WebSocketServer,
-		Opcode:       store.WebSocketText,
+		Direction:    events.WebSocketServer,
+		Opcode:       events.WebSocketText,
 		Payload:      []byte("streamed"),
 	})
 	require.NoError(t, err)
@@ -191,7 +192,7 @@ func TestLogWebSocketFrame_EmitsToChannel(t *testing.T) {
 	select {
 	case f := <-st.WebSocketFrames:
 		assert.Equal(t, connID, f.ConnectionID)
-		assert.Equal(t, store.WebSocketServer, f.Direction)
+		assert.Equal(t, events.WebSocketServer, f.Direction)
 		assert.Equal(t, []byte("streamed"), f.Payload)
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for WebSocketFrames channel emit")

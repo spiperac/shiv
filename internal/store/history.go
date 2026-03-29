@@ -213,6 +213,22 @@ func (s *Store) TransactionsSince(afterID uint64) ([]Transaction, error) {
 	return scanTransactions(rows)
 }
 
+// AllTransactions returns all transactions ordered by id descending, capped at
+// 500 rows. Used primarily in tests; production UI uses TransactionsPage.
+func (s *Store) AllTransactions() ([]Transaction, error) {
+	rows, err := s.db.Query(`
+		SELECT id, timestamp, host, method, url, proto,
+		       req_headers, req_body, status_code, resp_headers,
+		       resp_body, duration_ms, tls, in_scope
+		FROM history
+		ORDER BY id DESC LIMIT 500`)
+	if err != nil {
+		return nil, fmt.Errorf("store: query all transactions: %w", err)
+	}
+	defer rows.Close()
+	return scanTransactions(rows)
+}
+
 // ClearHistory deletes all rows from the history table.
 func (s *Store) ClearHistory() error {
 	return s.write(func() error {
