@@ -83,10 +83,12 @@ func (p *Plugin) callNoReturn(fn string, arg lua.LValue) (retErr error) {
 	return p.L.CallByParam(params)
 }
 
-// callReturnsTable invokes a Lua function that receives and returns a table.
-// Holds mu for the duration. Enforces callTimeout. Recovers panics.
+// callWithBuilder builds a Lua table and calls fn with it in a single locked
+// section, returning the result table. builder receives the VM and must
+// construct and return the argument table — it runs under mu. The Lua call
+// also runs under mu, so no VM access escapes the lock at any point.
 // Returns the returned table, or nil if the function returned nothing.
-func (p *Plugin) callReturnsTable(fn string, arg *lua.LTable) (ret *lua.LTable, retErr error) {
+func (p *Plugin) callWithBuilder(fn string, builder func(L *lua.LState) *lua.LTable) (ret *lua.LTable, retErr error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -100,6 +102,8 @@ func (p *Plugin) callReturnsTable(fn string, arg *lua.LTable) (ret *lua.LTable, 
 	if f == lua.LNil {
 		return nil, nil
 	}
+
+	arg := builder(p.L)
 
 	ctx, cancel := context.WithTimeout(context.Background(), callTimeout)
 	defer cancel()
@@ -117,23 +121,6 @@ func (p *Plugin) callReturnsTable(fn string, arg *lua.LTable) (ret *lua.LTable, 
 		return tbl, nil
 	}
 	return nil, nil
-}
-
-// newTable creates a new Lua table. Caller must hold mu or call only at load time.
-func (p *Plugin) newTable() *lua.LTable {
-	return p.L.NewTable()
-}
-
-// setField sets a field on a table. Caller must hold mu.
-func (p *Plugin) setField(tbl *lua.LTable, key string, val lua.LValue) {
-	p.L.SetField(tbl, key, val)
-}
-
-// newTableSafe creates a new Lua table under the plugin mutex.
-func (p *Plugin) newTableSafe() *lua.LTable {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.L.NewTable()
 }
 
 // close shuts down the Lua VM.
