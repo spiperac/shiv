@@ -53,7 +53,7 @@ func newTestStore(t *testing.T) *store.Store {
 func newEngine(t *testing.T, st *store.Store, scripts map[string]string) *plugin.Engine {
 	t.Helper()
 	dir := pluginDir(t, scripts)
-	e, err := plugin.NewEngine(dir, st)
+	e, err := plugin.NewEngine(dir, st, events.NewBus())
 	require.NoError(t, err)
 	t.Cleanup(func() { e.Close() })
 	return e
@@ -89,7 +89,7 @@ func responseEvent() events.ResponseEvent {
 func TestNewEngine_EmptyDir_ReturnsEngine(t *testing.T) {
 	st := newTestStore(t)
 	dir := t.TempDir()
-	e, err := plugin.NewEngine(dir, st)
+	e, err := plugin.NewEngine(dir, st, events.NewBus())
 	require.NoError(t, err)
 	assert.NotNil(t, e)
 	e.Close()
@@ -98,7 +98,7 @@ func TestNewEngine_EmptyDir_ReturnsEngine(t *testing.T) {
 func TestNewEngine_NonExistentDir_ReturnsEngine(t *testing.T) {
 	// Missing plugin dir is not fatal — treated as no plugins.
 	st := newTestStore(t)
-	e, err := plugin.NewEngine("/does/not/exist", st)
+	e, err := plugin.NewEngine("/does/not/exist", st, events.NewBus())
 	require.NoError(t, err)
 	assert.NotNil(t, e)
 	e.Close()
@@ -424,7 +424,7 @@ func TestObserveResponse_LuaError_OtherPluginsContinue(t *testing.T) {
 func TestClose_CalledTwice_NoPanic(t *testing.T) {
 	st := newTestStore(t)
 	dir := t.TempDir()
-	e, err := plugin.NewEngine(dir, st)
+	e, err := plugin.NewEngine(dir, st, events.NewBus())
 	require.NoError(t, err)
 	assert.NotPanics(t, func() {
 		e.Close()
@@ -446,7 +446,7 @@ func TestAPI_Log_IsAvailable(t *testing.T) {
 			end
 		`,
 	})
-	e, err := plugin.NewEngine(dir, st)
+	e, err := plugin.NewEngine(dir, st, events.NewBus())
 	require.NoError(t, err)
 	e.Close()
 }
