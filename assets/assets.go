@@ -35,8 +35,8 @@ var IconIntercept []byte
 //go:embed icons/loot.png
 var IconLoot []byte
 
-//go:embed icons/loot.png
-var IconLoot []byte
+//go:embed icons/plugin.png
+var IconPlugin []byte
 
 //go:embed icons/project.png
 var IconProject []byte

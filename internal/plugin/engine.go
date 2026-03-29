@@ -1,7 +1,11 @@
 package plugin
 
 import (
+	"fmt"
+	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 
 	lua "github.com/yuin/gopher-lua"
@@ -18,6 +22,8 @@ import (
 type Engine struct {
 	plugins []*Plugin
 	bus     *events.Bus
+	dir     string
+	st      *store.Store
 }
 
 // NewEngine loads all *.lua files from dir, registers each in the store,
@@ -29,12 +35,12 @@ func NewEngine(dir string, st *store.Store, bus *events.Bus) (*Engine, error) {
 		return nil, err
 	}
 
-	e := &Engine{plugins: plugins, bus: bus}
+	e := &Engine{plugins: plugins, bus: bus, dir: dir, st: st}
 
 	for _, p := range plugins {
 		// Persist plugin record; preserves existing enabled state on conflict.
-		if err := st.UpsertPlugin(p.name, p.path); err != nil {
-			logger.Error("plugin: upsert %s: %v", p.name, err)
+		if err := st.RegisterPlugin(p.name, p.path); err != nil {
+			logger.Error("plugin: register %s: %v", p.name, err)
 		}
 		// Restore enabled state from previous session.
 		if enabled, err := st.PluginEnabled(p.name); err == nil {
@@ -42,6 +48,14 @@ func NewEngine(dir string, st *store.Store, bus *events.Bus) (*Engine, error) {
 		}
 		// Drain any log() calls made during on_load so they reach the UI.
 		e.emitLogs(p)
+	}
+
+	active := make([]string, 0, len(plugins))
+	for _, p := range plugins {
+		active = append(active, p.name)
+	}
+	if err := st.ScanPlugins(active); err != nil {
+		logger.Error("plugin: scan: %v", err)
 	}
 
 	return e, nil
@@ -265,6 +279,59 @@ func (e *Engine) ObservePluginEnabled(ev events.SetPluginEnabledEvent) {
 			return
 		}
 	}
+}
+
+// ObserveLoadPlugin implements events.LoadPluginObserver.
+// Copies the selected file into the plugins directory, loads it, registers
+// it in the store, and appends it to the engine's plugin slice so it
+// participates in all subsequent hook calls.
+// Safe without a mutex — the bus is synchronous so this and all hook
+// iteration methods are always called sequentially.
+func (e *Engine) ObserveLoadPlugin(ev events.LoadPluginEvent) {
+	filename := filepath.Base(ev.SourcePath)
+	destPath := filepath.Join(e.dir, filename)
+
+	if err := copyFile(ev.SourcePath, destPath); err != nil {
+		logger.Error("plugin: import %s: %v", filename, err)
+		return
+	}
+
+	p, err := load(destPath, e.st)
+	if err != nil {
+		logger.Error("plugin: load %s: %v", filename, err)
+		return
+	}
+
+	if err := e.st.RegisterPlugin(p.name, p.path); err != nil {
+		logger.Error("plugin: register %s: %v", p.name, err)
+	}
+
+	e.emitLogs(p)
+	e.plugins = append(e.plugins, p)
+}
+
+// copyFile copies src to dst, creating the destination directory if needed.
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return fmt.Errorf("open: %w", err)
+	}
+	defer in.Close()
+
+	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
+		return fmt.Errorf("mkdir: %w", err)
+	}
+
+	out, err := os.Create(dst)
+	if err != nil {
+		return fmt.Errorf("create: %w", err)
+	}
+	defer out.Close()
+
+	if _, err := io.Copy(out, in); err != nil {
+		return fmt.Errorf("copy: %w", err)
+	}
+	return out.Sync()
 }
 
 // Close shuts down all plugin VMs.

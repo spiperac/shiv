@@ -45,6 +45,12 @@ type PluginEnabledObserver interface {
 	ObservePluginEnabled(SetPluginEnabledEvent)
 }
 
+// LoadPluginObserver is called synchronously when the user imports a new
+// plugin. The engine observes it to copy, load, and register the plugin.
+type LoadPluginObserver interface {
+	ObserveLoadPlugin(LoadPluginEvent)
+}
+
 // ── Func adapters ─────────────────────────────────────────────────────────────
 // Allow main.go to register plain closures without declaring named types.
 
@@ -84,6 +90,12 @@ func (f PluginEnabledObserverFunc) ObservePluginEnabled(e SetPluginEnabledEvent)
 	f(e)
 }
 
+type LoadPluginObserverFunc func(LoadPluginEvent)
+
+func (f LoadPluginObserverFunc) ObserveLoadPlugin(e LoadPluginEvent) {
+	f(e)
+}
+
 // ── Bus ───────────────────────────────────────────────────────────────────────
 
 // Bus holds registered handlers and dispatches events to them.
@@ -99,6 +111,7 @@ type Bus struct {
 	wsFrameObservers       []WebSocketFrameObserver
 	pluginLogObservers     []PluginLogObserver
 	pluginEnabledObservers []PluginEnabledObserver
+	pluginLoadObservers    []LoadPluginObserver
 }
 
 // NewBus returns a ready-to-use Bus with no handlers registered.
@@ -137,6 +150,10 @@ func (b *Bus) Register(h any) {
 	}
 	if v, ok := h.(PluginEnabledObserver); ok {
 		b.pluginEnabledObservers = append(b.pluginEnabledObservers, v)
+		matched = true
+	}
+	if v, ok := h.(LoadPluginObserver); ok {
+		b.pluginLoadObservers = append(b.pluginLoadObservers, v)
 		matched = true
 	}
 	if !matched {
@@ -236,5 +253,17 @@ func (b *Bus) EmitSetPluginEnabled(e SetPluginEnabledEvent) {
 
 	for _, o := range obs {
 		o.ObservePluginEnabled(e)
+	}
+}
+
+// EmitLoadPlugin calls all LoadPluginObservers in registration order.
+// Runs synchronously.
+func (b *Bus) EmitLoadPlugin(e LoadPluginEvent) {
+	b.mu.RLock()
+	obs := b.pluginLoadObservers
+	b.mu.RUnlock()
+
+	for _, o := range obs {
+		o.ObserveLoadPlugin(e)
 	}
 }

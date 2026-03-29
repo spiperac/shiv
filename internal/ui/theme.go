@@ -360,6 +360,8 @@ func AppIcon(name string) fyne.Resource {
 		return fyne.NewStaticResource("settings.png", assets.IconSettings)
 	case "toolbox":
 		return fyne.NewStaticResource("toolbox.png", assets.IconToolbox)
+	case "plugin":
+		return fyne.NewStaticResource("plugin.png", assets.IconPlugin)
 	case "web":
 		return fyne.NewStaticResource("web.png", assets.IconWeb)
 	case "web1":

@@ -102,3 +102,10 @@ type SetPluginEnabledEvent struct {
 	Name    string // plugin filename
 	Enabled bool
 }
+
+// LoadPluginEvent is emitted by the UI when the user selects a .lua file to
+// import. The engine observes it, copies the file into the plugins directory,
+// loads it, and registers it for subsequent hook calls.
+type LoadPluginEvent struct {
+	SourcePath string // absolute path to the selected .lua file
+}
