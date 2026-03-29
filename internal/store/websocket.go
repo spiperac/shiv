@@ -197,9 +197,9 @@ func (s *Store) ObserveWebSocketConnection(e events.WebSocketConnectionEvent) ui
 }
 
 // ObserveWebSocketFrame implements events.WebSocketFrameObserver.
-func (s *Store) ObserveWebSocketFrame(e events.WebSocketFrameEvent) {
+func (s *Store) ObserveWebSocketFrame(e events.WebSocketFrameEvent) events.WebSocketFrameResult {
 	if e.ConnectionID == 0 {
-		return
+		return events.WebSocketFrameResult{Payload: e.Payload}
 	}
 	payload := e.Payload
 	if len(payload) > wsFrameSizeLimit {
@@ -214,4 +214,5 @@ func (s *Store) ObserveWebSocketFrame(e events.WebSocketFrameEvent) {
 	}); err != nil {
 		logger.Error("store: observe ws frame: %v", err)
 	}
+	return events.WebSocketFrameResult{Payload: e.Payload}
 }

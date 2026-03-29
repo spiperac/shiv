@@ -170,6 +170,51 @@ func (e *Engine) ObserveResponse(ev events.ResponseEvent) {
 	}
 }
 
+// ObserveWebSocketFrame implements events.WebSocketFrameObserver.
+// Each plugin's on_websocket_frame(frame) hook is called in load order.
+// The hook may modify frame.payload — the last modification wins.
+// Plugins cannot drop frames.
+func (e *Engine) ObserveWebSocketFrame(ev events.WebSocketFrameEvent) events.WebSocketFrameResult {
+	payload := ev.Payload
+
+	// Snapshot Go values before the plugin loop.
+	connID := ev.ConnectionID
+	direction := int(ev.Direction)
+	opcode := int(ev.Opcode)
+	payloadSnap := string(ev.Payload)
+
+	for _, p := range e.plugins {
+		if !p.has("on_websocket_frame") {
+			continue
+		}
+
+		ret, err := p.callWithBuilder("on_websocket_frame", func(L *lua.LState) *lua.LTable {
+			tbl := L.NewTable()
+			L.SetField(tbl, "connection_id", lua.LNumber(connID))
+			L.SetField(tbl, "direction", lua.LNumber(direction))
+			L.SetField(tbl, "opcode", lua.LNumber(opcode))
+			L.SetField(tbl, "payload", lua.LString(payloadSnap))
+			return tbl
+		})
+		if err != nil {
+			logger.Error("plugin %s: on_websocket_frame: %v", p.name, err)
+			continue
+		}
+		if ret == nil {
+			continue
+		}
+
+		p.mu.Lock()
+		if b, ok := ret.RawGetString("payload").(lua.LString); ok {
+			payload = []byte(b)
+			payloadSnap = string(payload)
+		}
+		p.mu.Unlock()
+	}
+
+	return events.WebSocketFrameResult{Payload: payload}
+}
+
 // Close shuts down all plugin VMs.
 func (e *Engine) Close() {
 	for _, p := range e.plugins {

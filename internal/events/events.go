@@ -69,6 +69,12 @@ type WebSocketConnectionEvent struct {
 	Timestamp time.Time
 }
 
+// WebSocketFrameResult is returned by WebSocketFrameObserver. Payload is the
+// (possibly modified) payload to forward. If Payload is nil the original is used.
+type WebSocketFrameResult struct {
+	Payload []byte
+}
+
 // WebSocketFrameEvent is emitted for every proxied WebSocket frame in either
 // direction. ConnectionID is the value returned by the
 // WebSocketConnectionObserver that handled the corresponding

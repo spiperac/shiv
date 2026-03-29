@@ -438,6 +438,7 @@ func (r *repeaterTab) buildWSTabItem(tab store.RepeaterTab) *container.TabItem {
 
 	var wsConn *websocket.Conn
 	var connState wsConnState
+	var connID uint64
 
 	urlEntry := widget.NewEntry()
 	urlEntry.SetPlaceHolder("wss://host:port/path")
@@ -536,7 +537,7 @@ func (r *repeaterTab) buildWSTabItem(tab store.RepeaterTab) *container.TabItem {
 	startReadLoop := func(conn *websocket.Conn) {
 		go func() {
 			for {
-				_, payload, err := conn.ReadMessage()
+				msgType, payload, err := conn.ReadMessage()
 				if err != nil {
 					fyne.Do(func() {
 						if wsConn == conn {
@@ -553,7 +554,18 @@ func (r *repeaterTab) buildWSTabItem(tab store.RepeaterTab) *container.TabItem {
 					})
 					return
 				}
-				f := wsFrame{direction: "← Recv", payload: string(payload), ts: time.Now()}
+				finalPayload := payload
+				if r.bus != nil {
+					result := r.bus.EmitWebSocketFrame(events.WebSocketFrameEvent{
+						ConnectionID: connID,
+						Timestamp:    time.Now(),
+						Direction:    events.WebSocketServer,
+						Opcode:       events.WebSocketOpcode(msgType),
+						Payload:      payload,
+					})
+					finalPayload = result.Payload
+				}
+				f := wsFrame{direction: "← Recv", payload: string(finalPayload), ts: time.Now()}
 				fyne.Do(func() {
 					frames = append(frames, f)
 					frameTable.Refresh()
@@ -596,6 +608,14 @@ func (r *repeaterTab) buildWSTabItem(tab store.RepeaterTab) *container.TabItem {
 				wsConn = conn
 				connState = wsConnected
 				updateConnectBtn()
+				if r.bus != nil {
+					connID = r.bus.EmitWebSocketConnection(events.WebSocketConnectionEvent{
+						Host:      rawURL,
+						URL:       rawURL,
+						TLS:       strings.HasPrefix(rawURL, "wss://"),
+						Timestamp: time.Now(),
+					})
+				}
 				frames = append(frames, wsFrame{direction: "✓ Connected", payload: rawURL, ts: time.Now()})
 				frameTable.Refresh()
 				startReadLoop(conn)
@@ -613,14 +633,25 @@ func (r *repeaterTab) buildWSTabItem(tab store.RepeaterTab) *container.TabItem {
 		}
 		conn := wsConn
 		go func() {
-			err := conn.WriteMessage(websocket.TextMessage, []byte(payload))
+			finalPayload := []byte(payload)
+			if r.bus != nil {
+				result := r.bus.EmitWebSocketFrame(events.WebSocketFrameEvent{
+					ConnectionID: connID,
+					Timestamp:    time.Now(),
+					Direction:    events.WebSocketClient,
+					Opcode:       events.WebSocketText,
+					Payload:      finalPayload,
+				})
+				finalPayload = result.Payload
+			}
+			err := conn.WriteMessage(websocket.TextMessage, finalPayload)
 			fyne.Do(func() {
 				if err != nil {
 					frames = append(frames, wsFrame{direction: "⚠ Error", payload: "send failed: " + err.Error(), ts: time.Now()})
 					frameTable.Refresh()
 					return
 				}
-				frames = append(frames, wsFrame{direction: "→ Sent", payload: payload, ts: time.Now()})
+				frames = append(frames, wsFrame{direction: "→ Sent", payload: string(finalPayload), ts: time.Now()})
 				frameTable.Refresh()
 				frameTable.ScrollToRow(len(frames) - 1)
 			})

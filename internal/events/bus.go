@@ -27,9 +27,10 @@ type WebSocketConnectionObserver interface {
 }
 
 // WebSocketFrameObserver is called synchronously for every WebSocket frame.
-// Ordering is preserved within a connection.
+// Ordering is preserved within a connection. The returned WebSocketFrameResult
+// carries the (possibly modified) payload to forward.
 type WebSocketFrameObserver interface {
-	ObserveWebSocketFrame(WebSocketFrameEvent)
+	ObserveWebSocketFrame(WebSocketFrameEvent) WebSocketFrameResult
 }
 
 // ── Func adapters ─────────────────────────────────────────────────────────────
@@ -53,10 +54,10 @@ func (f WebSocketConnectionObserverFunc) ObserveWebSocketConnection(e WebSocketC
 	return f(e)
 }
 
-type WebSocketFrameObserverFunc func(WebSocketFrameEvent)
+type WebSocketFrameObserverFunc func(WebSocketFrameEvent) WebSocketFrameResult
 
-func (f WebSocketFrameObserverFunc) ObserveWebSocketFrame(e WebSocketFrameEvent) {
-	f(e)
+func (f WebSocketFrameObserverFunc) ObserveWebSocketFrame(e WebSocketFrameEvent) WebSocketFrameResult {
+	return f(e)
 }
 
 // ── Bus ───────────────────────────────────────────────────────────────────────
@@ -160,13 +161,22 @@ func (b *Bus) EmitWebSocketConnection(e WebSocketConnectionEvent) uint64 {
 }
 
 // EmitWebSocketFrame calls all WebSocketFrameObservers in registration order.
-// Runs synchronously to preserve per-connection frame ordering.
-func (b *Bus) EmitWebSocketFrame(e WebSocketFrameEvent) {
+// Runs synchronously to preserve per-connection frame ordering. Each observer
+// may return a modified payload — the last non-nil payload wins. The final
+// WebSocketFrameResult carries the payload to forward.
+func (b *Bus) EmitWebSocketFrame(e WebSocketFrameEvent) WebSocketFrameResult {
 	b.mu.RLock()
 	obs := b.wsFrameObservers
 	b.mu.RUnlock()
 
+	result := WebSocketFrameResult{Payload: e.Payload}
 	for _, o := range obs {
-		o.ObserveWebSocketFrame(e)
+		r := o.ObserveWebSocketFrame(e)
+		if r.Payload != nil {
+			result.Payload = r.Payload
+			// Propagate the modified payload to subsequent observers.
+			e.Payload = r.Payload
+		}
 	}
+	return result
 }

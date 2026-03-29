@@ -96,12 +96,13 @@ func TestRegister_AcceptsWebSocketConnectionObserver(t *testing.T) {
 func TestRegister_AcceptsWebSocketFrameObserver(t *testing.T) {
 	b := events.NewBus()
 	require.NotPanics(t, func() {
-		b.Register(events.WebSocketFrameObserverFunc(func(e events.WebSocketFrameEvent) {}))
+		b.Register(events.WebSocketFrameObserverFunc(func(e events.WebSocketFrameEvent) events.WebSocketFrameResult {
+			return events.WebSocketFrameResult{Payload: e.Payload}
+		}))
 	})
 }
 
 func TestRegister_MultiInterfaceTypeRegisteredForAll(t *testing.T) {
-	// A type implementing all four interfaces is registered for each one.
 	b := events.NewBus()
 
 	var requestCalled, responseCalled, wsConnCalled, wsFrameCalled bool
@@ -164,7 +165,6 @@ func TestEmitRequest_MiddlewareDrop_ReturnsDrop(t *testing.T) {
 }
 
 func TestEmitRequest_FirstDropShortCircuits(t *testing.T) {
-	// The second middleware must never be called when the first drops.
 	b := events.NewBus()
 	secondCalled := false
 
@@ -207,7 +207,6 @@ func TestEmitRequest_MiddlewareModifiesRequest(t *testing.T) {
 }
 
 func TestEmitRequest_ChainedMiddlewares_ModificationsAccumulate(t *testing.T) {
-	// Each middleware in the chain sees the output of the previous one.
 	b := events.NewBus()
 
 	b.Register(events.RequestMiddlewareFunc(func(e events.RequestEvent) events.RequestResult {
@@ -298,9 +297,6 @@ func TestEmitResponse_ObserversCalledInRegistrationOrder(t *testing.T) {
 }
 
 func TestEmitResponse_IsSynchronous(t *testing.T) {
-	// EmitResponse must block until all observers return. We verify this by
-	// having the observer set a flag and asserting it is set immediately after
-	// EmitResponse returns — no sleep required.
 	b := events.NewBus()
 	done := false
 
@@ -342,13 +338,13 @@ func TestEmitWebSocketConnection_ReturnsFirstNonZeroID(t *testing.T) {
 	b := events.NewBus()
 
 	b.Register(events.WebSocketConnectionObserverFunc(func(e events.WebSocketConnectionEvent) uint64 {
-		return 0 // returns zero — should be skipped
+		return 0
 	}))
 	b.Register(events.WebSocketConnectionObserverFunc(func(e events.WebSocketConnectionEvent) uint64 {
-		return 42 // first non-zero — should win
+		return 42
 	}))
 	b.Register(events.WebSocketConnectionObserverFunc(func(e events.WebSocketConnectionEvent) uint64 {
-		return 99 // subsequent non-zero — should be ignored
+		return 99
 	}))
 
 	id := b.EmitWebSocketConnection(newWSConnectionEvent())
@@ -357,7 +353,6 @@ func TestEmitWebSocketConnection_ReturnsFirstNonZeroID(t *testing.T) {
 }
 
 func TestEmitWebSocketConnection_AllObserversCalledEvenAfterNonZero(t *testing.T) {
-	// All observers are called regardless of what earlier ones returned.
 	b := events.NewBus()
 	var calls int
 
@@ -388,19 +383,20 @@ func TestEmitWebSocketConnection_ZeroReturnNotUsedAsID(t *testing.T) {
 
 // ── EmitWebSocketFrame ────────────────────────────────────────────────────────
 
-func TestEmitWebSocketFrame_NoHandlers_NoPanic(t *testing.T) {
+func TestEmitWebSocketFrame_NoHandlers_ReturnsOriginalPayload(t *testing.T) {
 	b := events.NewBus()
-	assert.NotPanics(t, func() {
-		b.EmitWebSocketFrame(newWSFrameEvent(1))
-	})
+	ev := newWSFrameEvent(1)
+	result := b.EmitWebSocketFrame(ev)
+	assert.Equal(t, ev.Payload, result.Payload)
 }
 
 func TestEmitWebSocketFrame_ObserverReceivesEvent(t *testing.T) {
 	b := events.NewBus()
 	var received events.WebSocketFrameEvent
 
-	b.Register(events.WebSocketFrameObserverFunc(func(e events.WebSocketFrameEvent) {
+	b.Register(events.WebSocketFrameObserverFunc(func(e events.WebSocketFrameEvent) events.WebSocketFrameResult {
 		received = e
+		return events.WebSocketFrameResult{Payload: e.Payload}
 	}))
 
 	ev := newWSFrameEvent(7)
@@ -412,12 +408,63 @@ func TestEmitWebSocketFrame_ObserverReceivesEvent(t *testing.T) {
 	assert.Equal(t, []byte("hello"), received.Payload)
 }
 
+func TestEmitWebSocketFrame_ObserverModifiesPayload(t *testing.T) {
+	b := events.NewBus()
+
+	b.Register(events.WebSocketFrameObserverFunc(func(e events.WebSocketFrameEvent) events.WebSocketFrameResult {
+		return events.WebSocketFrameResult{Payload: []byte("modified")}
+	}))
+
+	result := b.EmitWebSocketFrame(newWSFrameEvent(1))
+
+	assert.Equal(t, []byte("modified"), result.Payload)
+}
+
+func TestEmitWebSocketFrame_ChainedObservers_ModificationsAccumulate(t *testing.T) {
+	// Each observer sees the payload modified by the previous one.
+	b := events.NewBus()
+
+	b.Register(events.WebSocketFrameObserverFunc(func(e events.WebSocketFrameEvent) events.WebSocketFrameResult {
+		return events.WebSocketFrameResult{Payload: append(e.Payload, []byte("-first")...)}
+	}))
+	b.Register(events.WebSocketFrameObserverFunc(func(e events.WebSocketFrameEvent) events.WebSocketFrameResult {
+		return events.WebSocketFrameResult{Payload: append(e.Payload, []byte("-second")...)}
+	}))
+
+	ev := newWSFrameEvent(1)
+	result := b.EmitWebSocketFrame(ev)
+
+	assert.Equal(t, []byte("hello-first-second"), result.Payload)
+}
+
+func TestEmitWebSocketFrame_NilPayloadResult_KeepsPrevious(t *testing.T) {
+	// An observer returning nil Payload must not overwrite the previous result.
+	b := events.NewBus()
+
+	b.Register(events.WebSocketFrameObserverFunc(func(e events.WebSocketFrameEvent) events.WebSocketFrameResult {
+		return events.WebSocketFrameResult{Payload: []byte("set")}
+	}))
+	b.Register(events.WebSocketFrameObserverFunc(func(e events.WebSocketFrameEvent) events.WebSocketFrameResult {
+		return events.WebSocketFrameResult{Payload: nil}
+	}))
+
+	result := b.EmitWebSocketFrame(newWSFrameEvent(1))
+
+	assert.Equal(t, []byte("set"), result.Payload)
+}
+
 func TestEmitWebSocketFrame_MultipleObserversAllCalled(t *testing.T) {
 	b := events.NewBus()
 	var calls int
 
-	b.Register(events.WebSocketFrameObserverFunc(func(e events.WebSocketFrameEvent) { calls++ }))
-	b.Register(events.WebSocketFrameObserverFunc(func(e events.WebSocketFrameEvent) { calls++ }))
+	b.Register(events.WebSocketFrameObserverFunc(func(e events.WebSocketFrameEvent) events.WebSocketFrameResult {
+		calls++
+		return events.WebSocketFrameResult{Payload: e.Payload}
+	}))
+	b.Register(events.WebSocketFrameObserverFunc(func(e events.WebSocketFrameEvent) events.WebSocketFrameResult {
+		calls++
+		return events.WebSocketFrameResult{Payload: e.Payload}
+	}))
 
 	b.EmitWebSocketFrame(newWSFrameEvent(1))
 
@@ -425,17 +472,17 @@ func TestEmitWebSocketFrame_MultipleObserversAllCalled(t *testing.T) {
 }
 
 func TestEmitWebSocketFrame_OrderingPreserved(t *testing.T) {
-	// Frames emitted in order must be received in order by the observer.
 	b := events.NewBus()
 	var received []uint64
 
-	b.Register(events.WebSocketFrameObserverFunc(func(e events.WebSocketFrameEvent) {
+	b.Register(events.WebSocketFrameObserverFunc(func(e events.WebSocketFrameEvent) events.WebSocketFrameResult {
 		received = append(received, e.ConnectionID)
+		return events.WebSocketFrameResult{Payload: e.Payload}
 	}))
 
-	b.EmitWebSocketFrame(events.WebSocketFrameEvent{ConnectionID: 1})
-	b.EmitWebSocketFrame(events.WebSocketFrameEvent{ConnectionID: 2})
-	b.EmitWebSocketFrame(events.WebSocketFrameEvent{ConnectionID: 3})
+	b.EmitWebSocketFrame(events.WebSocketFrameEvent{ConnectionID: 1, Payload: []byte("a")})
+	b.EmitWebSocketFrame(events.WebSocketFrameEvent{ConnectionID: 2, Payload: []byte("b")})
+	b.EmitWebSocketFrame(events.WebSocketFrameEvent{ConnectionID: 3, Payload: []byte("c")})
 
 	assert.Equal(t, []uint64{1, 2, 3}, received)
 }
@@ -494,8 +541,9 @@ func TestWebSocketConnectionObserverFunc_DelegatesCall(t *testing.T) {
 
 func TestWebSocketFrameObserverFunc_DelegatesCall(t *testing.T) {
 	called := false
-	f := events.WebSocketFrameObserverFunc(func(e events.WebSocketFrameEvent) {
+	f := events.WebSocketFrameObserverFunc(func(e events.WebSocketFrameEvent) events.WebSocketFrameResult {
 		called = true
+		return events.WebSocketFrameResult{Payload: e.Payload}
 	})
 
 	f.ObserveWebSocketFrame(newWSFrameEvent(1))
@@ -506,8 +554,6 @@ func TestWebSocketFrameObserverFunc_DelegatesCall(t *testing.T) {
 // ── Concurrency ───────────────────────────────────────────────────────────────
 
 func TestBus_ConcurrentEmitRequest_Safe(t *testing.T) {
-	// Multiple goroutines emitting requests concurrently must not race.
-	// Run with -race to verify.
 	b := events.NewBus()
 	var count atomic.Int64
 
@@ -554,11 +600,9 @@ func TestBus_ConcurrentEmitResponse_Safe(t *testing.T) {
 }
 
 func TestBus_ConcurrentRegisterAndEmit_Safe(t *testing.T) {
-	// Registering handlers while emitting must not race.
 	b := events.NewBus()
 	var wg sync.WaitGroup
 
-	// Emitters
 	for range 20 {
 		wg.Add(1)
 		go func() {
@@ -568,7 +612,6 @@ func TestBus_ConcurrentRegisterAndEmit_Safe(t *testing.T) {
 		}()
 	}
 
-	// Concurrent registrations
 	for range 20 {
 		wg.Add(1)
 		go func() {
@@ -620,6 +663,7 @@ func (h *allHandler) ObserveWebSocketConnection(e events.WebSocketConnectionEven
 	return 1
 }
 
-func (h *allHandler) ObserveWebSocketFrame(e events.WebSocketFrameEvent) {
+func (h *allHandler) ObserveWebSocketFrame(e events.WebSocketFrameEvent) events.WebSocketFrameResult {
 	h.onWSFrame()
+	return events.WebSocketFrameResult{Payload: e.Payload}
 }

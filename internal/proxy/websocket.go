@@ -132,14 +132,14 @@ func (p *Proxy) handleWebSocketTLS(
 				}
 				return
 			}
-			p.bus.EmitWebSocketFrame(events.WebSocketFrameEvent{
+			result := p.bus.EmitWebSocketFrame(events.WebSocketFrameEvent{
 				ConnectionID: connID,
 				Timestamp:    time.Now(),
 				Direction:    events.WebSocketClient,
 				Opcode:       events.WebSocketOpcode(msgType),
 				Payload:      payload,
 			})
-			if err := upstreamConn.WriteMessage(msgType, payload); err != nil {
+			if err := upstreamConn.WriteMessage(msgType, result.Payload); err != nil {
 				logger.Debug("ws: browser→upstream write for %s: %v", bareHost, err)
 				return
 			}
@@ -156,14 +156,14 @@ func (p *Proxy) handleWebSocketTLS(
 				}
 				return
 			}
-			p.bus.EmitWebSocketFrame(events.WebSocketFrameEvent{
+			result := p.bus.EmitWebSocketFrame(events.WebSocketFrameEvent{
 				ConnectionID: connID,
 				Timestamp:    time.Now(),
 				Direction:    events.WebSocketServer,
 				Opcode:       events.WebSocketOpcode(msgType),
 				Payload:      payload,
 			})
-			if err := browserConn.WriteMessage(msgType, payload); err != nil {
+			if err := browserConn.WriteMessage(msgType, result.Payload); err != nil {
 				logger.Debug("ws: upstream→browser write for %s: %v", bareHost, err)
 				return
 			}
