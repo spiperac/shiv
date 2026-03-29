@@ -336,7 +336,8 @@ func (r *repeaterTab) buildHTTPTabItem(tab store.RepeaterTab) *container.TabItem
 
 	r.sendFns[tabItem] = doSend
 	r.tabIDs[tabItem] = tabID
-	r.loadFns[tabItem] = func() { reqEditor.SetText(tab.RawRequest) }
+	reqEditor.SetText(tab.RawRequest)
+	r.loadFns[tabItem] = func() {}
 
 	return tabItem
 }
