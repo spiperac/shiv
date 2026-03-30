@@ -77,6 +77,7 @@ func ShowMainWindow(fyneApp fyne.App, projectStore *store.Store, proxyServer *pr
 	mainWin := fyneApp.NewWindow("Shiv")
 	mainWin.Resize(fyne.NewSize(1280, 800))
 	mainWin.SetMaster()
+	mainWin.SetIcon(fyne.NewStaticResource("logo.png", assets.Logo))
 
 	applyTheme(fyneApp)
 

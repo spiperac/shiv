@@ -88,13 +88,14 @@ func (s *Store) write(writeFunc func() error) error {
 func (s *Store) writeLoop() {
 	for {
 		select {
-		case writeFunc := <-s.writeCh:
-			writeFunc()
+		case fn := <-s.writeCh:
+			_ = fn()
 		case <-s.done:
+
 			for {
 				select {
 				case fn := <-s.writeCh:
-					fn()
+					_ = fn()
 				default:
 					return
 				}

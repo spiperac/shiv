@@ -68,7 +68,7 @@ type InterceptGate struct {
 
 	bypassMu     sync.Mutex
 	bypass       chan struct{} // closed to release all waiting goroutines
-	bypassClosed bool         // tracks whether current bypass is already closed
+	bypassClosed bool          // tracks whether current bypass is already closed
 }
 
 // NewInterceptGate creates a new gate. Intercept is off by default.

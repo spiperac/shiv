@@ -67,7 +67,7 @@ func tlsOverTunnel(t *testing.T, conn net.Conn, serverName string) *tls.Conn {
 	t.Helper()
 	tlsConn := tls.Client(conn, &tls.Config{
 		ServerName:         serverName,
-		InsecureSkipVerify: true, //nolint:gosec — test only
+		InsecureSkipVerify: true, //nolint:gosec
 	})
 	require.NoError(t, tlsConn.Handshake())
 	t.Cleanup(func() { tlsConn.Close() })

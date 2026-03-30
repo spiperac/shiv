@@ -21,6 +21,10 @@
           xorg.libXinerama
           xorg.libXi
           xorg.libXxf86vm
+          wayland
+          wayland.dev
+	  wayland-protocols
+	  libxkbcommon
           libGL
           libGLU
           glibc

@@ -275,10 +275,6 @@ type vagueTheme struct {
 	loaded *LoadedTheme
 }
 
-func NewVagueTheme(dark bool) fyne.Theme {
-	return &vagueTheme{dark: dark}
-}
-
 func NewVagueThemeWithLoaded(dark bool, lt *LoadedTheme) fyne.Theme {
 	return &vagueTheme{dark: dark, loaded: lt}
 }

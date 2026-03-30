@@ -193,19 +193,6 @@ func ParseRawHeaders(raw string) http.Header {
 	return headers
 }
 
-// SplitRawResponse splits a raw HTTP response string into headers and body parts.
-// Returns the header section and raw body bytes separately.
-func SplitRawResponse(raw string) (headers string, body []byte) {
-	// Responses use CRLF, but be defensive.
-	if idx := strings.Index(raw, "\r\n\r\n"); idx >= 0 {
-		return raw[:idx], []byte(raw[idx+4:])
-	}
-	if idx := strings.Index(raw, "\n\n"); idx >= 0 {
-		return raw[:idx], []byte(raw[idx+2:])
-	}
-	return raw, nil
-}
-
 // normalizeLineEndings ensures CRLF throughout the header section only.
 // It does NOT touch the body to avoid corrupting binary or multi-byte content.
 func normalizeLineEndings(raw string) string {
