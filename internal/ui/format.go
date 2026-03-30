@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
-	internalhttp "github.com/shiv/internal/http"
 	"github.com/shiv/internal/store"
 )
 
@@ -39,6 +39,16 @@ func PrettyJSON(body []byte) []byte {
 	return buf.Bytes()
 }
 
+// hostHeader returns the value to use for the Host header in a reconstructed
+// raw request. Default ports (80 for HTTP, 443 for HTTPS) are omitted per
+// RFC 7230. Non-standard ports are always included.
+func hostHeader(tx store.Transaction) string {
+	if tx.Port == 0 {
+		return tx.Host
+	}
+	return tx.Host + ":" + strconv.Itoa(tx.Port)
+}
+
 // FormatStoreRequest serialises a Transaction into a raw HTTP/1.1 request string
 // suitable for display in the UI or sending via Repeater/Intruder.
 //
@@ -50,12 +60,9 @@ func FormatStoreRequest(tx store.Transaction) string {
 		proto = "HTTP/1.1"
 	}
 
-	// Use NormalizeHost to strip default ports correctly (handles IPv6, non-standard ports).
-	host := internalhttp.NormalizeHost(tx.Host, tx.TLS)
-
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s %s %s\r\n", tx.Method, PathOf(tx.URL), proto)
-	fmt.Fprintf(&b, "Host: %s\r\n", host)
+	fmt.Fprintf(&b, "Host: %s\r\n", hostHeader(tx))
 
 	keys := sortedKeys(tx.ReqHeaders)
 	for _, k := range keys {

@@ -2,9 +2,7 @@ package ui
 
 import (
 	"fmt"
-	"net"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -800,21 +798,11 @@ func (h *historyTab) contextMenuItems(tx store.Transaction) []widgets.ContextMen
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 func (h *historyTab) sendToRepeater(tx store.Transaction) {
-	host, portStr, err := net.SplitHostPort(tx.Host)
-	if err != nil {
-		host = tx.Host
-		if tx.TLS {
-			portStr = "443"
-		} else {
-			portStr = "80"
-		}
-	}
-	port, _ := strconv.Atoi(portStr)
 	path := PathOf(tx.URL)
 	if len(path) > 20 {
 		path = path[:20] + "..."
 	}
-	h.repeater.AddTab(fmt.Sprintf("%s %s", tx.Method, path), host, port, tx.TLS, FormatStoreRequest(tx))
+	h.repeater.AddTab(fmt.Sprintf("%s %s", tx.Method, path), tx.Host, tx.Port, tx.TLS, FormatStoreRequest(tx))
 }
 
 func (h *historyTab) sendToIntruder(tx store.Transaction) {

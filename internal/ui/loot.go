@@ -2,8 +2,6 @@ package ui
 
 import (
 	"fmt"
-	"net"
-	"strconv"
 	"strings"
 	"text/template"
 	"time"
@@ -346,18 +344,17 @@ func (l *lootTab) showLinkedRequest(entry store.LootEntry) {
 					fmt.Sprintf("Linked Request — %s %s", tx.Method, tx.URL),
 					FormatStoreRequest(*tx),
 					FormatStoreResponse(*tx),
-					tx.Host,
-					tx.TLS,
+					tx.Host, tx.Port, tx.TLS,
 				)
 			})
 		}()
 	} else {
-		host, _, useTLS := internalhttp.ParseHostFromRaw(entry.RawRequest)
-		l.showRequestResponseDialog("Linked Request", entry.RawRequest, entry.RawResponse, host, useTLS)
+		host, port, useTLS := internalhttp.ParseHostFromRaw(entry.RawRequest)
+		l.showRequestResponseDialog("Linked Request", entry.RawRequest, entry.RawResponse, host, port, useTLS)
 	}
 }
 
-func (l *lootTab) showRequestResponseDialog(title, rawRequest, rawResponse, host string, useTLS bool) {
+func (l *lootTab) showRequestResponseDialog(title, rawRequest, rawResponse, host string, port int, useTLS bool) {
 	reqEntry := widgets.NewTextView()
 	reqEntry.SetWindow(l.win)
 	reqEntry.SetText(rawRequest)
@@ -379,23 +376,13 @@ func (l *lootTab) showRequestResponseDialog(title, rawRequest, rawResponse, host
 		l.win)
 
 	sendBtn.OnTapped = func() {
-		hostOnly, portStr, err := net.SplitHostPort(host)
-		if err != nil {
-			hostOnly = host
-			if useTLS {
-				portStr = "443"
-			} else {
-				portStr = "80"
-			}
-		}
-		port, _ := strconv.Atoi(portStr)
 		path := PathOf(internalhttp.ExtractURL(rawRequest))
 		if len(path) > 20 {
 			path = path[:20] + "..."
 		}
 		l.repeater.AddTab(
 			fmt.Sprintf("%s %s", internalhttp.ExtractMethod(rawRequest), path),
-			hostOnly, port, useTLS, rawRequest,
+			host, port, useTLS, rawRequest,
 		)
 		d.Hide()
 	}

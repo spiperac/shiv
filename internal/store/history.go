@@ -9,10 +9,13 @@ import (
 )
 
 // Transaction is a matched HTTP request/response pair.
+// Host is always a pure hostname — never host:port.
+// Port holds the destination port as an integer.
 type Transaction struct {
 	ID          uint64
 	Timestamp   time.Time
 	Host        string
+	Port        int
 	Method      string
 	URL         string
 	Proto       string // "HTTP/2" or "HTTP/1.1"
@@ -70,12 +73,13 @@ func (s *Store) GetTransaction(id uint64) (*Transaction, error) {
 	var timestampStr, reqHeaders, respHeaders string
 	var tlsFlag, scopeFlag int
 	err := s.db.QueryRow(`
-		SELECT id, timestamp, host, method, url, proto,
+		SELECT id, timestamp, host, port, method, url, proto,
 		       req_headers, req_body, status_code, resp_headers,
 		       resp_body, duration_ms, tls, in_scope
 		FROM history WHERE id = ?`, id,
 	).Scan(
-		&transaction.ID, &timestampStr, &transaction.Host, &transaction.Method, &transaction.URL, &transaction.Proto,
+		&transaction.ID, &timestampStr, &transaction.Host, &transaction.Port,
+		&transaction.Method, &transaction.URL, &transaction.Proto,
 		&reqHeaders, &transaction.ReqBody, &transaction.StatusCode, &respHeaders,
 		&transaction.RespBody, &transaction.DurationMs, &tlsFlag, &scopeFlag,
 	)
@@ -111,11 +115,11 @@ func (s *Store) Log(t Transaction) error {
 		}
 		res, err := s.db.Exec(`
 			INSERT INTO history
-				(timestamp, host, method, url, proto, req_headers, req_body,
+				(timestamp, host, port, method, url, proto, req_headers, req_body,
 				 status_code, resp_headers, resp_body, duration_ms, tls, in_scope)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			t.Timestamp.UTC().Format(time.RFC3339),
-			t.Host, t.Method, t.URL, proto,
+			t.Host, t.Port, t.Method, t.URL, proto,
 			string(reqH), t.ReqBody,
 			t.StatusCode, string(respH), t.RespBody,
 			t.DurationMs,
@@ -178,7 +182,7 @@ func (s *Store) TransactionsPage(beforeID uint64, filter TransactionFilter) ([]T
 	}
 
 	query := `
-		SELECT id, timestamp, host, method, url, proto,
+		SELECT id, timestamp, host, port, method, url, proto,
 		       req_headers, '' as req_body, status_code, resp_headers,
 		       '' as resp_body, duration_ms, tls, in_scope
 		FROM history`
@@ -200,7 +204,7 @@ func (s *Store) TransactionsPage(beforeID uint64, filter TransactionFilter) ([]T
 // capped at 200. Bodies are omitted. Used by pollMissed.
 func (s *Store) TransactionsSince(afterID uint64) ([]Transaction, error) {
 	rows, err := s.db.Query(`
-		SELECT id, timestamp, host, method, url, proto,
+		SELECT id, timestamp, host, port, method, url, proto,
 		       req_headers, '' as req_body, status_code, resp_headers,
 		       '' as resp_body, duration_ms, tls, in_scope
 		FROM history
@@ -217,7 +221,7 @@ func (s *Store) TransactionsSince(afterID uint64) ([]Transaction, error) {
 // 500 rows. Used primarily in tests; production UI uses TransactionsPage.
 func (s *Store) AllTransactions() ([]Transaction, error) {
 	rows, err := s.db.Query(`
-		SELECT id, timestamp, host, method, url, proto,
+		SELECT id, timestamp, host, port, method, url, proto,
 		       req_headers, req_body, status_code, resp_headers,
 		       resp_body, duration_ms, tls, in_scope
 		FROM history
@@ -251,7 +255,7 @@ func scanTransactions(rows interface {
 		var ts, reqH, respH string
 		var tlsInt, scopeInt int
 		if err := rows.Scan(
-			&tx.ID, &ts, &tx.Host, &tx.Method, &tx.URL, &tx.Proto,
+			&tx.ID, &ts, &tx.Host, &tx.Port, &tx.Method, &tx.URL, &tx.Proto,
 			&reqH, &tx.ReqBody, &tx.StatusCode, &respH,
 			&tx.RespBody, &tx.DurationMs, &tlsInt, &scopeInt,
 		); err != nil {

@@ -115,6 +115,7 @@ func (s *Store) migrate() error {
 		`ALTER TABLE loot ADD COLUMN raw_request TEXT DEFAULT ''`,
 		`ALTER TABLE loot ADD COLUMN raw_response TEXT DEFAULT ''`,
 		`ALTER TABLE history ADD COLUMN proto TEXT NOT NULL DEFAULT 'HTTP/1.1'`,
+		`ALTER TABLE history ADD COLUMN port INTEGER NOT NULL DEFAULT 443`,
 		`ALTER TABLE repeater_tabs ADD COLUMN tab_type TEXT NOT NULL DEFAULT 'http'`,
 	}
 	for _, migration := range migrations {
@@ -133,6 +134,7 @@ CREATE TABLE IF NOT EXISTS history (
 	id           INTEGER PRIMARY KEY AUTOINCREMENT,
 	timestamp    TEXT    NOT NULL,
 	host         TEXT    NOT NULL,
+	port         INTEGER NOT NULL DEFAULT 443,
 	method       TEXT    NOT NULL,
 	url          TEXT    NOT NULL,
 	proto        TEXT    NOT NULL DEFAULT 'HTTP/1.1',
