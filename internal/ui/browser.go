@@ -171,9 +171,15 @@ func LaunchBrowser(fyneApp fyne.App, browser DetectedBrowser, proxyHost string, 
 			"--ignore-certificate-errors",
 			"--user-data-dir=" + profile,
 			"--no-first-run",
+			"--no-default-browser-check",
 			"--disable-extensions",
 			"--disable-sync",
-			"--no-default-browser-check",
+			"--disable-background-networking",
+			"--disable-default-apps",
+			"--disable-component-update",
+			"--disable-breakpad",
+			"--metrics-recording-only",
+			"--disable-features=OptimizationHints,MediaRouter",
 		}
 	}
 

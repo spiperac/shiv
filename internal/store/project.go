@@ -25,6 +25,14 @@ type Store struct {
 	// because log appends must never block on DB I/O.
 	pluginLogsMu sync.RWMutex
 	pluginLogs   map[string][]string
+
+	// scopeCache is an in-memory copy of the scope table.
+	// Populated lazily on first InScope call and invalidated on every write.
+	// Protected by scopeCacheMu — separate from the write serialiser so
+	// InScope reads never block on DB I/O.
+	scopeCacheMu  sync.RWMutex
+	scopeCache    []ScopeEntry
+	scopeCacheSet bool
 }
 
 func Open(path string) (*Store, error) {
