@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -212,70 +214,25 @@ func buildHARResponse(tx Transaction) HARResponse {
 }
 
 func extractQueryString(rawURL string) []HARNameValue {
-	idx := -1
-	for i, c := range rawURL {
-		if c == '?' {
-			idx = i
-			break
-		}
-	}
+	idx := strings.Index(rawURL, "?")
 	if idx < 0 {
 		return []HARNameValue{}
 	}
-	query := rawURL[idx+1:]
-	var pairs []HARNameValue
-	for _, part := range splitQuery(query) {
-		if part == "" {
-			continue
-		}
-		i := -1
-		for j, c := range part {
-			if c == '=' {
-				i = j
-				break
-			}
-		}
-		if i < 0 {
-			pairs = append(pairs, HARNameValue{Name: part, Value: ""})
-		} else {
-			pairs = append(pairs, HARNameValue{Name: part[:i], Value: part[i+1:]})
-		}
-	}
-	if pairs == nil {
+	parsed, err := url.ParseQuery(rawURL[idx+1:])
+	if err != nil || len(parsed) == 0 {
 		return []HARNameValue{}
+	}
+	pairs := make([]HARNameValue, 0, len(parsed))
+	for k, vals := range parsed {
+		for _, v := range vals {
+			pairs = append(pairs, HARNameValue{Name: k, Value: v})
+		}
 	}
 	return pairs
 }
 
-func splitQuery(q string) []string {
-	var parts []string
-	start := 0
-	for i, c := range q {
-		if c == '&' {
-			parts = append(parts, q[start:i])
-			start = i + 1
-		}
-	}
-	parts = append(parts, q[start:])
-	return parts
-}
-
 func statusText(code int) string {
-	texts := map[int]string{
-		100: "Continue", 101: "Switching Protocols",
-		200: "OK", 201: "Created", 202: "Accepted", 204: "No Content",
-		206: "Partial Content",
-		301: "Moved Permanently", 302: "Found", 303: "See Other",
-		304: "Not Modified", 307: "Temporary Redirect", 308: "Permanent Redirect",
-		400: "Bad Request", 401: "Unauthorized", 403: "Forbidden",
-		404: "Not Found", 405: "Method Not Allowed", 408: "Request Timeout",
-		409: "Conflict", 410: "Gone", 413: "Payload Too Large",
-		415: "Unsupported Media Type", 422: "Unprocessable Entity",
-		429: "Too Many Requests",
-		500: "Internal Server Error", 501: "Not Implemented",
-		502: "Bad Gateway", 503: "Service Unavailable", 504: "Gateway Timeout",
-	}
-	if t, ok := texts[code]; ok {
+	if t := http.StatusText(code); t != "" {
 		return t
 	}
 	return fmt.Sprintf("%d", code)
