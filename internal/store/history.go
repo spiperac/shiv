@@ -281,3 +281,14 @@ func boolToInt(b bool) int {
 	}
 	return 0
 }
+
+// DeleteTransactionsByHost deletes all history rows for the given host.
+func (s *Store) DeleteTransactionsByHost(host string) error {
+	return s.write(func() error {
+		_, err := s.db.Exec(`DELETE FROM history WHERE host = ?`, host)
+		if err != nil {
+			return fmt.Errorf("store: delete transactions for host %s: %w", host, err)
+		}
+		return nil
+	})
+}

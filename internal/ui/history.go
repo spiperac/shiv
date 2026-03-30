@@ -12,12 +12,11 @@ import (
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/widget"
 
+	internalhttp "github.com/shiv/internal/http"
 	"github.com/shiv/internal/logger"
 	"github.com/shiv/internal/store"
 	"github.com/shiv/internal/ui/widgets"
 )
-
-// ── Site map ──────────────────────────────────────────────────────────────────
 
 type siteMapNode struct {
 	children map[string]*siteMapNode
@@ -37,7 +36,6 @@ func newSiteMap() *siteMap {
 	return &siteMap{hosts: make(map[string]*siteMapNode)}
 }
 
-// add records the full host+path from a transaction into the site map.
 func (sm *siteMap) add(tx store.Transaction) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
@@ -53,7 +51,6 @@ func (sm *siteMap) add(tx store.Transaction) {
 	}
 }
 
-// clear removes all entries. Only called on history Clear.
 func (sm *siteMap) clear() {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
@@ -136,9 +133,6 @@ func labelFor(uid widget.TreeNodeID) string {
 		return host
 	}
 	segs := splitPath(path)
-	if len(segs) == 0 {
-		return "/"
-	}
 	return "/" + segs[len(segs)-1]
 }
 
@@ -167,7 +161,21 @@ func splitPath(path string) []string {
 	return segs
 }
 
-// ── History tab ───────────────────────────────────────────────────────────────
+func matchesFilter(tx store.Transaction, f store.TransactionFilter) bool {
+	if f.Host != "" && tx.Host != f.Host {
+		return false
+	}
+	if f.PathPrefix != "" {
+		p := PathOf(tx.URL)
+		if p != f.PathPrefix && !strings.HasPrefix(p, f.PathPrefix+"/") {
+			return false
+		}
+	}
+	if !f.ShowOutScope && !tx.InScope {
+		return false
+	}
+	return true
+}
 
 type historyTab struct {
 	projectStore *store.Store
@@ -208,6 +216,7 @@ type historyTab struct {
 	reqLabel     *widgets.TextView
 	respLabel    *widgets.TextView
 	scopeBtn     *widget.Button
+	deleteBtn    *widget.Button
 
 	selectedTx  store.Transaction
 	hasSelected bool
@@ -235,12 +244,6 @@ func newHistoryTab(projectStore *store.Store, win fyne.Window, repeater *repeate
 	}
 }
 
-func (h *historyTab) buildSiteMapPane() fyne.CanvasObject {
-	header := container.NewHBox(newBoldLabel("Site Map"), layout.NewSpacer(), h.scopeBtn)
-	return container.NewBorder(header, nil, nil, nil, h.tree)
-}
-
-// currentFilter builds a TransactionFilter from the current UI state.
 func (h *historyTab) currentFilter() store.TransactionFilter {
 	f := store.TransactionFilter{
 		Search:       h.filterEntry.Text,
@@ -256,9 +259,6 @@ func (h *historyTab) currentFilter() store.TransactionFilter {
 	return f
 }
 
-// loadFirstPage resets the table to the first page matching the current filter.
-// NEVER touches the site map — the site map is independent of pagination.
-// Must be called from the Fyne main goroutine.
 func (h *historyTab) loadFirstPage() {
 	f := h.currentFilter()
 	h.mu.Lock()
@@ -272,18 +272,25 @@ func (h *historyTab) loadFirstPage() {
 			logger.Error("history: load first page: %v", err)
 			return
 		}
+		fullLen := len(txs)
+		if f.PathPrefix != "" {
+			filtered := make([]store.Transaction, 0, len(txs))
+			for _, tx := range txs {
+				if matchesFilter(tx, f) {
+					filtered = append(filtered, tx)
+				}
+			}
+			txs = filtered
+		}
 		fyne.Do(func() {
 			h.mu.Lock()
-			// Drop stale results from a superseded query.
 			if localID != h.queryID {
 				h.mu.Unlock()
 				return
 			}
-			// A loadNextPage may have been in-flight when the filter changed.
-			// Reset it so pagination works correctly on the new filter.
 			h.loadingMore = false
 			h.displayed = txs
-			h.hasMore = len(txs) == store.PageSize
+			h.hasMore = fullLen == store.PageSize
 			if len(txs) > 0 {
 				h.cursor = txs[len(txs)-1].ID
 				if txs[0].ID > h.maxID {
@@ -299,8 +306,6 @@ func (h *historyTab) loadFirstPage() {
 	}()
 }
 
-// loadNextPage appends the next page of rows to the bottom of the table.
-// NEVER touches the site map.
 func (h *historyTab) loadNextPage() {
 	h.mu.Lock()
 	if h.loadingMore || !h.hasMore || h.cursor == 0 {
@@ -322,17 +327,25 @@ func (h *historyTab) loadNextPage() {
 			h.mu.Unlock()
 			return
 		}
+		fullLen := len(txs)
+		if f.PathPrefix != "" {
+			filtered := make([]store.Transaction, 0, len(txs))
+			for _, tx := range txs {
+				if matchesFilter(tx, f) {
+					filtered = append(filtered, tx)
+				}
+			}
+			txs = filtered
+		}
 		fyne.Do(func() {
 			h.mu.Lock()
-			// If filter changed while we were fetching, discard results and
-			// reset loadingMore so pagination works again on the new filter.
 			if localID != h.queryID {
 				h.loadingMore = false
 				h.mu.Unlock()
 				return
 			}
 			h.displayed = append(h.displayed, txs...)
-			h.hasMore = len(txs) == store.PageSize
+			h.hasMore = fullLen == store.PageSize
 			if len(txs) > 0 {
 				h.cursor = txs[len(txs)-1].ID
 			}
@@ -369,6 +382,31 @@ func (h *historyTab) build() fyne.CanvasObject {
 		})
 	})
 
+	h.deleteBtn = widget.NewButtonWithIcon("", AppIcon("delete"), func() {
+		if h.selectedUID == "" || !strings.HasPrefix(h.selectedUID, "h:") {
+			return
+		}
+		host := h.selectedUID[2:]
+		if err := h.projectStore.DeleteTransactionsByHost(host); err != nil {
+			logger.Error("history: delete host %s: %v", host, err)
+			return
+		}
+		h.siteMap.mu.Lock()
+		delete(h.siteMap.hosts, host)
+		h.siteMap.mu.Unlock()
+		h.selectedUID = ""
+		h.mu.Lock()
+		h.displayed = nil
+		h.cursor = 0
+		h.hasMore = true
+		h.mu.Unlock()
+		h.tree.UnselectAll()
+		h.tree.Refresh()
+		h.deleteBtn.Disable()
+		h.loadFirstPage()
+	})
+	h.deleteBtn.Disable()
+
 	clearBtn := widget.NewButtonWithIcon("Clear", AppIcon("delete"), func() {
 		if err := h.projectStore.ClearHistory(); err != nil {
 			logger.Error("clear history: %v", err)
@@ -380,7 +418,6 @@ func (h *historyTab) build() fyne.CanvasObject {
 		h.maxID = 0
 		h.hasMore = false
 		h.mu.Unlock()
-		// Clear is the ONLY place that resets the site map.
 		h.siteMap.clear()
 		h.selectedUID = ""
 		h.tree.Refresh()
@@ -429,10 +466,13 @@ func (h *historyTab) build() fyne.CanvasObject {
 	)
 	h.tree.OnSelected = func(uid widget.TreeNodeID) {
 		h.selectedUID = uid
-		// Site map selection filters the table only — never touches the site map.
+		if strings.HasPrefix(uid, "h:") {
+			h.deleteBtn.Enable()
+		} else {
+			h.deleteBtn.Disable()
+		}
 		h.loadFirstPage()
 	}
-	// OnUnselected intentionally not set — see original comment.
 
 	h.reqLabel = widgets.NewTextView()
 	h.reqLabel.SetWindow(h.win)
@@ -545,21 +585,17 @@ func (h *historyTab) build() fyne.CanvasObject {
 	detailSplit := container.NewHSplit(reqPane, respPane)
 	detailSplit.SetOffset(0.5)
 
+	siteMapHeader := container.NewHBox(newBoldLabel("Site Map"), layout.NewSpacer(), h.deleteBtn, h.scopeBtn)
+	siteMapPane := container.NewBorder(siteMapHeader, nil, nil, nil, h.tree)
+
 	topSplit := container.NewHSplit(
-		h.buildSiteMapPane(),
+		siteMapPane,
 		container.NewBorder(filterBar, nil, nil, nil, tableObj),
 	)
 	topSplit.SetOffset(0.25)
 
 	mainSplit := container.NewVSplit(topSplit, detailSplit)
 	mainSplit.SetOffset(0.55)
-
-	// ── Startup: build full site map then load first page ────────────────────
-	//
-	// SiteMapEntries loads host+url for every historical row so the site map
-	// shows all paths immediately — not just what's in the current page.
-	// The site map is never cleared or modified by filter/page changes.
-	// Only the Clear button resets it.
 
 	go func() {
 		entries, err := h.projectStore.SiteMapEntries()
@@ -575,24 +611,7 @@ func (h *historyTab) build() fyne.CanvasObject {
 		})
 	}()
 
-	go func() {
-		txs, err := h.projectStore.TransactionsPage(0, store.TransactionFilter{ShowOutScope: true})
-		if err != nil {
-			logger.Error("history: initial page load: %v", err)
-			return
-		}
-		fyne.Do(func() {
-			h.mu.Lock()
-			h.displayed = txs
-			h.hasMore = len(txs) == store.PageSize
-			if len(txs) > 0 {
-				h.cursor = txs[len(txs)-1].ID
-				h.maxID = txs[0].ID
-			}
-			h.mu.Unlock()
-			h.table.ScrollToRow(0)
-		})
-	}()
+	h.loadFirstPage()
 
 	go h.watchUpdates()
 	go h.pollMissed()
@@ -600,61 +619,38 @@ func (h *historyTab) build() fyne.CanvasObject {
 	return mainSplit
 }
 
-// ── Live updates ──────────────────────────────────────────────────────────────
-
 func (h *historyTab) watchUpdates() {
 	defer recoverPanic("watchUpdates")
 	for tx := range h.projectStore.Updates {
-		transaction := tx
 		fyne.Do(func() {
 			h.mu.Lock()
 			for _, r := range h.displayed {
-				if r.ID == transaction.ID {
+				if r.ID == tx.ID {
 					h.mu.Unlock()
 					return
 				}
 			}
-			if transaction.ID > h.maxID {
-				h.maxID = transaction.ID
+			if tx.ID > h.maxID {
+				h.maxID = tx.ID
 			}
-
-			// Only prepend if the transaction matches the current filter.
 			f := h.currentFilter()
-			show := true
-			if f.Host != "" && transaction.Host != f.Host {
-				show = false
-			}
-			if show && f.PathPrefix != "" {
-				p := PathOf(transaction.URL)
-				if p != f.PathPrefix && !strings.HasPrefix(p, f.PathPrefix+"/") {
-					show = false
-				}
-			}
-			if show && !f.ShowOutScope && !transaction.InScope {
-				show = false
-			}
-
+			show := matchesFilter(tx, f)
 			if show {
-				h.displayed = append([]store.Transaction{transaction}, h.displayed...)
-				if len(h.displayed) > 0 {
-					h.cursor = h.displayed[len(h.displayed)-1].ID
-				}
+				h.displayed = append([]store.Transaction{tx}, h.displayed...)
+				h.cursor = h.displayed[len(h.displayed)-1].ID
 			}
-
-			isSelected := h.hasSelected && h.selectedTx.ID == transaction.ID
+			isSelected := h.hasSelected && h.selectedTx.ID == tx.ID
 			if isSelected {
-				h.selectedTx = transaction
+				h.selectedTx = tx
 			}
 			h.mu.Unlock()
-
-			// Always add to site map — independent of what's displayed.
-			h.siteMap.add(transaction)
+			h.siteMap.add(tx)
 			h.tree.Refresh()
 			if show {
 				h.table.Refresh()
 			}
 			if isSelected {
-				h.showDetail(transaction)
+				h.showDetail(tx)
 			}
 		})
 	}
@@ -693,32 +689,16 @@ func (h *historyTab) pollMissed() {
 				if tx.ID > h.maxID {
 					h.maxID = tx.ID
 				}
-				// Always add to site map regardless of filter.
 				h.siteMap.add(tx)
-
-				show := true
-				if f.Host != "" && tx.Host != f.Host {
-					show = false
-				}
-				if show && f.PathPrefix != "" {
-					p := PathOf(tx.URL)
-					if p != f.PathPrefix && !strings.HasPrefix(p, f.PathPrefix+"/") {
-						show = false
-					}
-				}
-				if show && !f.ShowOutScope && !tx.InScope {
-					show = false
-				}
-				if show {
+				if matchesFilter(tx, f) {
 					h.displayed = append([]store.Transaction{tx}, h.displayed...)
 					added = true
 				}
 			}
-			if added && len(h.displayed) > 0 {
+			if added {
 				h.cursor = h.displayed[len(h.displayed)-1].ID
 			}
 			h.mu.Unlock()
-
 			h.tree.Refresh()
 			if added {
 				h.table.Refresh()
@@ -727,16 +707,12 @@ func (h *historyTab) pollMissed() {
 	}
 }
 
-// ── Detail ────────────────────────────────────────────────────────────────────
-
 func (h *historyTab) showDetail(tx store.Transaction) {
-	tx.RespBody = TruncateBody(tx.RespBody)
-	tx.ReqBody = TruncateBody(tx.ReqBody)
+	tx.RespBody = internalhttp.TruncateBody(tx.RespBody)
+	tx.ReqBody = internalhttp.TruncateBody(tx.ReqBody)
 	h.reqLabel.SetText(FormatStoreRequest(tx))
 	h.respLabel.SetText(FormatStoreResponse(tx))
 }
-
-// ── Context menu ──────────────────────────────────────────────────────────────
 
 func (h *historyTab) contextMenuItems(tx store.Transaction) []widgets.ContextMenuItem {
 	return []widgets.ContextMenuItem{
@@ -794,8 +770,6 @@ func (h *historyTab) contextMenuItems(tx store.Transaction) []widgets.ContextMen
 		},
 	}
 }
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
 
 func (h *historyTab) sendToRepeater(tx store.Transaction) {
 	path := PathOf(tx.URL)

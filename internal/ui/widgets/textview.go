@@ -85,6 +85,8 @@ type TextView struct {
 	win  fyne.Window
 	rend *tvRenderer
 
+	scrollbarHovered bool // true while mouse is over scrollbar track or thumb — widens thumb
+
 	pendingThumb  *tvScrollThumb // created in Build before rend exists; wired in CreateRenderer
 	lastWrapWidth float32        // wrap width used for the last parse pass
 	pendingText   string         // text waiting to be parsed once width is known
@@ -441,10 +443,23 @@ func (layer *tvInputLayer) Dragged(ev *fyne.DragEvent) {
 	view.Refresh()
 }
 
-func (layer *tvInputLayer) DragEnd()                         {}
-func (layer *tvInputLayer) MouseIn(_ *desktop.MouseEvent)    {}
-func (layer *tvInputLayer) MouseOut()                        {}
-func (layer *tvInputLayer) MouseMoved(_ *desktop.MouseEvent) {}
+func (layer *tvInputLayer) DragEnd()                      {}
+func (layer *tvInputLayer) MouseIn(_ *desktop.MouseEvent) {}
+
+func (layer *tvInputLayer) MouseOut() {
+	if layer.view.scrollbarHovered {
+		layer.view.scrollbarHovered = false
+		layer.view.Refresh()
+	}
+}
+
+func (layer *tvInputLayer) MouseMoved(ev *desktop.MouseEvent) {
+	inScrollbar := layer.inScrollbarArea(ev.Position.X)
+	if inScrollbar != layer.view.scrollbarHovered {
+		layer.view.scrollbarHovered = inScrollbar
+		layer.view.Refresh()
+	}
+}
 
 func isWordRune(r rune) bool {
 	return unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_' || r == '-'
@@ -469,9 +484,22 @@ func (thumb *tvScrollThumb) CreateRenderer() fyne.WidgetRenderer {
 	return widget.NewSimpleRenderer(thumb.rect)
 }
 
-func (thumb *tvScrollThumb) Cursor() desktop.Cursor           { return desktop.DefaultCursor }
-func (thumb *tvScrollThumb) MouseIn(_ *desktop.MouseEvent)    {}
-func (thumb *tvScrollThumb) MouseOut()                        {}
+func (thumb *tvScrollThumb) Cursor() desktop.Cursor { return desktop.DefaultCursor }
+
+func (thumb *tvScrollThumb) MouseIn(_ *desktop.MouseEvent) {
+	if !thumb.view.scrollbarHovered {
+		thumb.view.scrollbarHovered = true
+		thumb.view.Refresh()
+	}
+}
+
+func (thumb *tvScrollThumb) MouseOut() {
+	if thumb.view.scrollbarHovered {
+		thumb.view.scrollbarHovered = false
+		thumb.view.Refresh()
+	}
+}
+
 func (thumb *tvScrollThumb) MouseMoved(_ *desktop.MouseEvent) {}
 
 func (thumb *tvScrollThumb) Dragged(ev *fyne.DragEvent) {
@@ -744,10 +772,15 @@ func (renderer *tvRenderer) layoutContent() {
 
 func (renderer *tvRenderer) layoutScrollbar(totalLines int) {
 	bodyHeight := renderer.size.Height - tvPadY*2
-	trackX := renderer.size.Width - tvScrollW
+	trackW := float32(tvScrollW)
+	trackX := renderer.size.Width - trackW
+	if renderer.view.scrollbarHovered {
+		trackW = tvScrollW + 6
+		trackX = renderer.size.Width - trackW
+	}
 
 	renderer.scrollTrack.Move(fyne.NewPos(trackX, tvPadY))
-	renderer.scrollTrack.Resize(fyne.NewSize(tvScrollW, bodyHeight))
+	renderer.scrollTrack.Resize(fyne.NewSize(trackW, bodyHeight))
 
 	visibleLines := int(bodyHeight / tvLineH)
 	if totalLines <= visibleLines {
@@ -772,16 +805,23 @@ func (renderer *tvRenderer) layoutScrollbar(totalLines int) {
 	scrollable := float32(totalLines - visibleLines)
 	thumbY := tvPadY + (float32(renderer.view.scrollOffset)/scrollable)*(bodyHeight-thumbHeight)
 
-	renderer.scrollThumb.Move(fyne.NewPos(trackX+1, thumbY))
-	renderer.scrollThumb.Resize(fyne.NewSize(tvScrollW-2, thumbHeight))
+	thumbW := float32(tvScrollW - 2)
+	thumbX := trackX + 1
+	if renderer.view.scrollbarHovered {
+		thumbW = trackW - 2
+		thumbX = trackX + 1
+	}
+
+	renderer.scrollThumb.Move(fyne.NewPos(thumbX, thumbY))
+	renderer.scrollThumb.Resize(fyne.NewSize(thumbW, thumbHeight))
 	renderer.scrollThumb.FillColor = theme.Color(theme.ColorNameForeground)
-	renderer.scrollThumb.CornerRadius = (tvScrollW - 2) / 2
+	renderer.scrollThumb.CornerRadius = thumbW / 2
 	renderer.scrollThumb.Refresh()
 
 	if renderer.thumbWidget != nil {
 		renderer.thumbWidget.rect.FillColor = color.Transparent
-		renderer.thumbWidget.Move(fyne.NewPos(trackX+1, thumbY))
-		renderer.thumbWidget.Resize(fyne.NewSize(tvScrollW-2, thumbHeight))
+		renderer.thumbWidget.Move(fyne.NewPos(thumbX, thumbY))
+		renderer.thumbWidget.Resize(fyne.NewSize(thumbW, thumbHeight))
 		renderer.thumbWidget.Show()
 	}
 }

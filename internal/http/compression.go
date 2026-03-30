@@ -13,6 +13,8 @@ import (
 	"github.com/klauspost/compress/zstd"
 )
 
+const MaxDisplayBytes = 64 * 1024 // 64 KB
+
 // Decompress decompresses body according to the Content-Encoding header.
 // Returns the original body unchanged if encoding is unknown or decompression fails.
 //
@@ -125,4 +127,16 @@ func IsBinary(header http.Header) bool {
 		}
 	}
 	return true
+}
+
+// TruncateBody returns body truncated to MaxDisplayBytes with a notice appended.
+func TruncateBody(body []byte) []byte {
+	if len(body) <= MaxDisplayBytes {
+		return body
+	}
+	notice := []byte("\n... truncated")
+	out := make([]byte, MaxDisplayBytes+len(notice))
+	copy(out, body[:MaxDisplayBytes])
+	copy(out[MaxDisplayBytes:], notice)
+	return out
 }

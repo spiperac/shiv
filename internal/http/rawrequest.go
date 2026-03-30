@@ -79,14 +79,7 @@ func SendRaw(opts RawRequestOptions) (*RawResponse, error) {
 
 	body, _ := io.ReadAll(io.LimitReader(httpResp.Body, 2<<20))
 	body = Decompress(httpResp.Header, body)
-	if len(body) > 64*1024 {
-		notice := []byte("\n... truncated")
-		truncated := make([]byte, 64*1024+len(notice))
-		copy(truncated, body[:64*1024])
-		copy(truncated[64*1024:], notice)
-		body = truncated
-	}
-
+	body = TruncateBody(body)
 	rawResp := buildRawResponse(httpResp, body)
 
 	return &RawResponse{

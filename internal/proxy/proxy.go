@@ -13,6 +13,7 @@ import (
 	"github.com/shiv/internal/cert"
 	"github.com/shiv/internal/events"
 	internalhttp "github.com/shiv/internal/http"
+	"github.com/shiv/internal/logger"
 )
 
 type Proxy struct {
@@ -97,7 +98,7 @@ func (p *Proxy) Restart(newAddr string) error {
 
 	go func() {
 		if err := newSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			fmt.Println("proxy: ListenAndServe:", err)
+			logger.Error("proxy: ListenAndServe: %v", err)
 		}
 	}()
 	return nil

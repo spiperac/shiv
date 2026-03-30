@@ -11,8 +11,6 @@ import (
 	"github.com/shiv/internal/store"
 )
 
-const MaxDisplayBytes = 64 * 1024 // 64 KB
-
 // PathOf extracts the path+query portion from a full URL string.
 func PathOf(rawURL string) string {
 	for _, prefix := range []string{"https://", "http://"} {
@@ -53,7 +51,6 @@ func hostHeader(tx store.Transaction) string {
 // suitable for display in the UI or sending via Repeater/Intruder.
 //
 // The protocol is always written as HTTP/1.1 regardless of what was captured —
-// HTTP/2 is a transport concern and cannot be sent as raw text over a socket.
 func FormatStoreRequest(tx store.Transaction) string {
 	proto := tx.Proto
 	if proto == "" {
@@ -111,18 +108,6 @@ func FormatStoreResponse(tx store.Transaction) string {
 		}
 	}
 	return b.String()
-}
-
-// TruncateBody returns body truncated to MaxDisplayBytes with a notice appended.
-func TruncateBody(body []byte) []byte {
-	if len(body) <= MaxDisplayBytes {
-		return body
-	}
-	notice := []byte("\n... truncated")
-	out := make([]byte, MaxDisplayBytes+len(notice))
-	copy(out, body[:MaxDisplayBytes])
-	copy(out[MaxDisplayBytes:], notice)
-	return out
 }
 
 func sortedKeys(h map[string][]string) []string {

@@ -65,6 +65,8 @@ type DataTable struct {
 
 	nearBottomFired bool // debounce: only fire once per approach to the bottom
 
+	scrollbarHovered bool
+
 	win        fyne.Window
 	rend       *dtRenderer
 	inputLayer *dtInputLayer
@@ -494,10 +496,15 @@ func (r *dtRenderer) layoutBody() {
 func (r *dtRenderer) layoutScrollbar() {
 	totalRows := r.table.rowCount()
 	bodyHeight := r.size.Height - dtHdrH
-	trackX := r.size.Width - dtScrollW
+	trackW := dtScrollW
+	trackX := r.size.Width - trackW
+	if r.table.scrollbarHovered {
+		trackW = dtScrollW + 6
+		trackX = r.size.Width - trackW
+	}
 
 	r.scrollTrack.Move(fyne.NewPos(trackX, dtHdrH))
-	r.scrollTrack.Resize(fyne.NewSize(dtScrollW, bodyHeight))
+	r.scrollTrack.Resize(fyne.NewSize(trackW, bodyHeight))
 
 	visibleRows := int(bodyHeight / dtRowH)
 	if totalRows <= visibleRows {
@@ -518,10 +525,11 @@ func (r *dtRenderer) layoutScrollbar() {
 		return
 	}
 
+	thumbW := trackW - 2
 	r.scrollThumb.Move(fyne.NewPos(trackX+1, thumbY))
-	r.scrollThumb.Resize(fyne.NewSize(dtScrollW-2, thumbH))
+	r.scrollThumb.Resize(fyne.NewSize(thumbW, thumbH))
 	r.scrollThumb.FillColor = theme.Color(theme.ColorNameForeground)
-	r.scrollThumb.CornerRadius = (dtScrollW - 2) / 2
+	r.scrollThumb.CornerRadius = thumbW / 2
 	r.scrollThumb.Refresh()
 }
 
@@ -697,10 +705,21 @@ func (layer *dtInputLayer) Dragged(ev *fyne.DragEvent) {
 	table.Refresh()
 }
 
-func (layer *dtInputLayer) DragEnd()                         { layer.draggingThumb = false }
-func (layer *dtInputLayer) MouseIn(_ *desktop.MouseEvent)    {}
-func (layer *dtInputLayer) MouseOut()                        {}
-func (layer *dtInputLayer) MouseMoved(_ *desktop.MouseEvent) {}
+func (layer *dtInputLayer) DragEnd()                      { layer.draggingThumb = false }
+func (layer *dtInputLayer) MouseIn(_ *desktop.MouseEvent) {}
+func (layer *dtInputLayer) MouseOut() {
+	if layer.table.scrollbarHovered {
+		layer.table.scrollbarHovered = false
+		layer.table.Refresh()
+	}
+}
+func (layer *dtInputLayer) MouseMoved(ev *desktop.MouseEvent) {
+	inScrollbar := layer.inScrollbarArea(ev.Position.X)
+	if inScrollbar != layer.table.scrollbarHovered {
+		layer.table.scrollbarHovered = inScrollbar
+		layer.table.Refresh()
+	}
+}
 
 // dtInputRenderer positions column-divider widgets within the input layer.
 type dtInputRenderer struct {
