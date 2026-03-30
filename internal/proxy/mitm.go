@@ -34,6 +34,8 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		logger.Error("mitm: hijack: %v", err)
 		return
 	}
+	p.trackConn(clientConn)
+	defer p.untrackConn(clientConn)
 	defer clientConn.Close()
 
 	bareHost, _, err := net.SplitHostPort(r.Host)

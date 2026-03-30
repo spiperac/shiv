@@ -12,7 +12,6 @@ import (
 
 	"github.com/shiv/assets"
 	"github.com/shiv/internal/events"
-	"github.com/shiv/internal/proxy"
 	"github.com/shiv/internal/store"
 )
 
@@ -71,7 +70,7 @@ func setProxyStatus(prefs fyne.Preferences, running bool) {
 	}
 }
 
-func ShowMainWindow(fyneApp fyne.App, projectStore *store.Store, proxyServer *proxy.Proxy, bus *events.Bus, launchWin fyne.Window) {
+func ShowMainWindow(fyneApp fyne.App, projectStore *store.Store, bus *events.Bus, launchWin fyne.Window) {
 	prefs := fyneApp.Preferences()
 
 	mainWin := fyneApp.NewWindow("Shiv")
@@ -105,12 +104,9 @@ func ShowMainWindow(fyneApp fyne.App, projectStore *store.Store, proxyServer *pr
 			proxyHost := prefs.StringWithFallback(prefKeyProxyHost, defaultProxyHost)
 			proxyPort := prefs.IntWithFallback(prefKeyProxyPort, defaultProxyPort)
 			addr := fmt.Sprintf("%s:%d", proxyHost, proxyPort)
-			if err := proxyServer.Restart(addr); err != nil {
-				// Restart failed synchronously — don't mark as running.
-				isRunning = false
-			}
+			bus.EmitProxyRestart(events.ProxyRestartEvent{Addr: addr})
 		} else {
-			proxyServer.Stop()
+			bus.EmitProxyStop(events.ProxyStopEvent{})
 		}
 
 		setProxyStatus(prefs, isRunning)
@@ -149,10 +145,8 @@ func ShowMainWindow(fyneApp fyne.App, projectStore *store.Store, proxyServer *pr
 
 	keybinds := newKeybinds(mainWin, tabs, history, repeater, prefs)
 
-	// Menu items
-
 	settingsMenuItem := fyne.NewMenuItem("Settings", func() {
-		showSettingsDialog(fyneApp, mainWin, proxyServer, keybinds)
+		showSettingsDialog(fyneApp, mainWin, bus, keybinds)
 	})
 	settingsMenuItem.Icon = AppIcon("toolbox")
 
@@ -171,7 +165,6 @@ func ShowMainWindow(fyneApp fyne.App, projectStore *store.Store, proxyServer *pr
 		toggleThemeMenuItem,
 		settingsMenuItem,
 	}
-	// Hide toggle if active user theme only has one variant.
 	if lt := loadActiveTheme(fyneApp); lt != nil && !lt.HasBoth {
 		toggleThemeMenuItem.Disabled = true
 	}

@@ -51,6 +51,14 @@ type LoadPluginObserver interface {
 	ObserveLoadPlugin(LoadPluginEvent)
 }
 
+// ProxyCommandObserver is implemented by the proxy to react to UI-initiated
+// control events. Restart starts or restarts the proxy on the given address.
+// Stop shuts the proxy down.
+type ProxyCommandObserver interface {
+	ObserveProxyRestart(ProxyRestartEvent)
+	ObserveProxyStop(ProxyStopEvent)
+}
+
 // ── Func adapters ─────────────────────────────────────────────────────────────
 // Allow main.go to register plain closures without declaring named types.
 
@@ -112,6 +120,7 @@ type Bus struct {
 	pluginLogObservers     []PluginLogObserver
 	pluginEnabledObservers []PluginEnabledObserver
 	pluginLoadObservers    []LoadPluginObserver
+	proxyCommandObservers  []ProxyCommandObserver
 }
 
 // NewBus returns a ready-to-use Bus with no handlers registered.
@@ -154,6 +163,10 @@ func (b *Bus) Register(h any) {
 	}
 	if v, ok := h.(LoadPluginObserver); ok {
 		b.pluginLoadObservers = append(b.pluginLoadObservers, v)
+		matched = true
+	}
+	if v, ok := h.(ProxyCommandObserver); ok {
+		b.proxyCommandObservers = append(b.proxyCommandObservers, v)
 		matched = true
 	}
 	if !matched {
@@ -225,7 +238,6 @@ func (b *Bus) EmitWebSocketFrame(e WebSocketFrameEvent) WebSocketFrameResult {
 		r := o.ObserveWebSocketFrame(e)
 		if r.Payload != nil {
 			result.Payload = r.Payload
-			// Propagate the modified payload to subsequent observers.
 			e.Payload = r.Payload
 		}
 	}
@@ -265,5 +277,29 @@ func (b *Bus) EmitLoadPlugin(e LoadPluginEvent) {
 
 	for _, o := range obs {
 		o.ObserveLoadPlugin(e)
+	}
+}
+
+// EmitProxyRestart calls all ProxyCommandObservers to restart on the given address.
+// Runs synchronously.
+func (b *Bus) EmitProxyRestart(e ProxyRestartEvent) {
+	b.mu.RLock()
+	obs := b.proxyCommandObservers
+	b.mu.RUnlock()
+
+	for _, o := range obs {
+		o.ObserveProxyRestart(e)
+	}
+}
+
+// EmitProxyStop calls all ProxyCommandObservers to stop the proxy.
+// Runs synchronously.
+func (b *Bus) EmitProxyStop(e ProxyStopEvent) {
+	b.mu.RLock()
+	obs := b.proxyCommandObservers
+	b.mu.RUnlock()
+
+	for _, o := range obs {
+		o.ObserveProxyStop(e)
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -19,8 +20,9 @@ type Proxy struct {
 	certAuth *cert.CA
 	bus      *events.Bus
 
-	mu  sync.Mutex
-	srv *http.Server
+	mu    sync.Mutex
+	srv   *http.Server
+	conns sync.Map // active hijacked net.Conn
 }
 
 const maxBodySize = 10 << 20
@@ -30,11 +32,28 @@ func New(addr string, bus *events.Bus) (*Proxy, error) {
 	if err != nil {
 		return nil, fmt.Errorf("proxy: load CA: %w", err)
 	}
-	return &Proxy{addr: addr, certAuth: ca, bus: bus}, nil
+	p := &Proxy{addr: addr, certAuth: ca, bus: bus}
+	bus.Register(p)
+	return p, nil
 }
 
 func (p *Proxy) CA() *cert.CA {
 	return p.certAuth
+}
+
+func (p *Proxy) trackConn(c net.Conn) {
+	p.conns.Store(c, struct{}{})
+}
+
+func (p *Proxy) untrackConn(c net.Conn) {
+	p.conns.Delete(c)
+}
+
+func (p *Proxy) closeAllConns() {
+	p.conns.Range(func(k, _ any) bool {
+		k.(net.Conn).SetDeadline(time.Now())
+		return true
+	})
 }
 
 func (p *Proxy) Start() error {
@@ -61,18 +80,25 @@ func (p *Proxy) Restart(newAddr string) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = srv.Shutdown(ctx)
+	}
 
-		p.mu.Lock()
-		p.srv = nil
-		p.mu.Unlock()
+	newSrv := &http.Server{
+		Addr:         newAddr,
+		Handler:      p,
+		ReadTimeout:  60 * time.Second,
+		WriteTimeout: 60 * time.Second,
+		IdleTimeout:  120 * time.Second,
 	}
 
 	p.mu.Lock()
 	p.addr = newAddr
+	p.srv = newSrv
 	p.mu.Unlock()
 
 	go func() {
-		_ = p.Start()
+		if err := newSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			fmt.Println("proxy: ListenAndServe:", err)
+		}
 	}()
 	return nil
 }
@@ -91,6 +117,18 @@ func (p *Proxy) Stop() {
 		p.srv = nil
 		p.mu.Unlock()
 	}
+
+	p.closeAllConns()
+}
+
+// ObserveProxyRestart implements events.ProxyCommandObserver.
+func (p *Proxy) ObserveProxyRestart(e events.ProxyRestartEvent) {
+	_ = p.Restart(e.Addr)
+}
+
+// ObserveProxyStop implements events.ProxyCommandObserver.
+func (p *Proxy) ObserveProxyStop(_ events.ProxyStopEvent) {
+	p.Stop()
 }
 
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {

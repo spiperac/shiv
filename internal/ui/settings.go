@@ -15,13 +15,13 @@ import (
 	"fyne.io/fyne/v2/widget"
 
 	"github.com/shiv/internal/cert"
+	"github.com/shiv/internal/events"
 	"github.com/shiv/internal/logger"
-	"github.com/shiv/internal/proxy"
 )
 
 var settingsWin fyne.Window
 
-func showSettingsDialog(fyneApp fyne.App, parentWin fyne.Window, proxyServer *proxy.Proxy, keybinds *Keybinds) {
+func showSettingsDialog(fyneApp fyne.App, parentWin fyne.Window, bus *events.Bus, keybinds *Keybinds) {
 	if settingsWin != nil {
 		settingsWin.RequestFocus()
 		return
@@ -29,7 +29,7 @@ func showSettingsDialog(fyneApp fyne.App, parentWin fyne.Window, proxyServer *pr
 
 	tabs := container.NewAppTabs(
 		container.NewTabItem("Certificate", buildCertificateTab(parentWin)),
-		container.NewTabItem("Proxy", buildProxyTab(fyneApp, proxyServer)),
+		container.NewTabItem("Proxy", buildProxyTab(fyneApp, bus)),
 		container.NewTabItem("Browser", buildBrowserTab(fyneApp, parentWin)),
 		container.NewTabItem("Appearance & Shortcuts", buildAppearanceTab(fyneApp, keybinds)),
 	)
@@ -104,7 +104,7 @@ func buildCertificateTab(parentWin fyne.Window) fyne.CanvasObject {
 	)
 }
 
-func buildProxyTab(fyneApp fyne.App, proxyServer *proxy.Proxy) fyne.CanvasObject {
+func buildProxyTab(fyneApp fyne.App, bus *events.Bus) fyne.CanvasObject {
 	prefs := fyneApp.Preferences()
 
 	hostEntry := widget.NewEntry()
@@ -134,16 +134,12 @@ func buildProxyTab(fyneApp fyne.App, proxyServer *proxy.Proxy) fyne.CanvasObject
 
 		if enabledCheck.Checked {
 			addr := fmt.Sprintf("%s:%d", proxyHost, proxyPort)
-			if err := proxyServer.Restart(addr); err != nil {
-				proxyStatus.SetText("Failed to restart proxy: " + err.Error())
-				logger.Error("settings: restart proxy: %v", err)
-				return
-			}
+			bus.EmitProxyRestart(events.ProxyRestartEvent{Addr: addr})
 			proxyStatus.SetText(fmt.Sprintf("Proxy restarted on %s:%d", proxyHost, proxyPort))
 			proxyRunningBinding.Set(true)
 			proxyStatusBinding.Set(fmt.Sprintf("Proxy: running on %s:%d", proxyHost, proxyPort))
 		} else {
-			proxyServer.Stop()
+			bus.EmitProxyStop(events.ProxyStopEvent{})
 			proxyStatus.SetText("Proxy stopped.")
 			proxyRunningBinding.Set(false)
 			proxyStatusBinding.Set("Proxy: stopped")
@@ -249,7 +245,6 @@ func buildAppearanceTab(fyneApp fyne.App, keybinds *Keybinds) fyne.CanvasObject 
 	themeDirLabel.Wrapping = fyne.TextWrapBreak
 	themeDirLabel.Importance = widget.LowImportance
 
-	// ── Shortcuts ─────────────────────────────────────────────────────────────
 	sendKeyEntry := widget.NewEntry()
 	sendKeyEntry.SetText(prefs.StringWithFallback(prefKeySendRequest, string(defaultKeySendRequest)))
 

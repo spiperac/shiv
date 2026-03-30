@@ -109,3 +109,14 @@ type SetPluginEnabledEvent struct {
 type LoadPluginEvent struct {
 	SourcePath string // absolute path to the selected .lua file
 }
+
+// ProxyRestartEvent is emitted by the UI when the user saves proxy settings
+// or toggles the proxy on. Addr is the new listen address (host:port).
+// The proxy observes this and restarts on the new address.
+type ProxyRestartEvent struct {
+	Addr string
+}
+
+// ProxyStopEvent is emitted by the UI when the user toggles the proxy off.
+// The proxy observes this and stops listening.
+type ProxyStopEvent struct{}

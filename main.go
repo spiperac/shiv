@@ -103,14 +103,10 @@ func main() {
 		}
 
 		if prefs.BoolWithFallback("proxy_enabled", true) {
-			go func() {
-				if err := proxyServer.Start(); err != nil {
-					logger.Error("proxy: %v", err)
-				}
-			}()
+			bus.EmitProxyRestart(events.ProxyRestartEvent{Addr: proxyAddr})
 		}
 
-		ui.ShowMainWindow(fyneApp, projectStore, proxyServer, bus, launchWin)
+		ui.ShowMainWindow(fyneApp, projectStore, bus, launchWin)
 	})
 
 	fyneApp.Run()
