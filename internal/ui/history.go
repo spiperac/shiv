@@ -5,7 +5,6 @@ import (
 	"slices"
 	"strings"
 	"sync"
-	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
@@ -193,9 +192,6 @@ type historyTab struct {
 	// cursor is the lowest ID in displayed. The next page loads id < cursor.
 	cursor uint64
 
-	// maxID is the highest ID seen, used by pollMissed.
-	maxID uint64
-
 	// loadingMore prevents concurrent next-page loads.
 	loadingMore bool
 
@@ -259,6 +255,26 @@ func (h *historyTab) currentFilter() store.TransactionFilter {
 	return f
 }
 
+// fetchPage fetches a page of transactions from the DB and applies
+// path-prefix filtering. Returns filtered results and unfiltered count.
+func (h *historyTab) fetchPage(cursor uint64, f store.TransactionFilter) ([]store.Transaction, int, error) {
+	txs, err := h.projectStore.TransactionsPage(cursor, f)
+	if err != nil {
+		return nil, 0, err
+	}
+	fullLen := len(txs)
+	if f.PathPrefix != "" {
+		filtered := make([]store.Transaction, 0, len(txs))
+		for _, tx := range txs {
+			if matchesFilter(tx, f) {
+				filtered = append(filtered, tx)
+			}
+		}
+		txs = filtered
+	}
+	return txs, fullLen, nil
+}
+
 func (h *historyTab) loadFirstPage() {
 	f := h.currentFilter()
 	h.mu.Lock()
@@ -267,20 +283,10 @@ func (h *historyTab) loadFirstPage() {
 	h.mu.Unlock()
 
 	go func() {
-		txs, err := h.projectStore.TransactionsPage(0, f)
+		txs, fullLen, err := h.fetchPage(0, f)
 		if err != nil {
 			logger.Error("history: load first page: %v", err)
 			return
-		}
-		fullLen := len(txs)
-		if f.PathPrefix != "" {
-			filtered := make([]store.Transaction, 0, len(txs))
-			for _, tx := range txs {
-				if matchesFilter(tx, f) {
-					filtered = append(filtered, tx)
-				}
-			}
-			txs = filtered
 		}
 		fyne.Do(func() {
 			h.mu.Lock()
@@ -293,9 +299,6 @@ func (h *historyTab) loadFirstPage() {
 			h.hasMore = fullLen == store.PageSize
 			if len(txs) > 0 {
 				h.cursor = txs[len(txs)-1].ID
-				if txs[0].ID > h.maxID {
-					h.maxID = txs[0].ID
-				}
 			} else {
 				h.cursor = 0
 				h.hasMore = false
@@ -319,23 +322,13 @@ func (h *historyTab) loadNextPage() {
 
 	f := h.currentFilter()
 	go func() {
-		txs, err := h.projectStore.TransactionsPage(cursor, f)
+		txs, fullLen, err := h.fetchPage(cursor, f)
 		if err != nil {
 			logger.Error("history: load next page: %v", err)
 			h.mu.Lock()
 			h.loadingMore = false
 			h.mu.Unlock()
 			return
-		}
-		fullLen := len(txs)
-		if f.PathPrefix != "" {
-			filtered := make([]store.Transaction, 0, len(txs))
-			for _, tx := range txs {
-				if matchesFilter(tx, f) {
-					filtered = append(filtered, tx)
-				}
-			}
-			txs = filtered
 		}
 		fyne.Do(func() {
 			h.mu.Lock()
@@ -415,7 +408,6 @@ func (h *historyTab) build() fyne.CanvasObject {
 		h.mu.Lock()
 		h.displayed = nil
 		h.cursor = 0
-		h.maxID = 0
 		h.hasMore = false
 		h.mu.Unlock()
 		h.siteMap.clear()
@@ -614,7 +606,6 @@ func (h *historyTab) build() fyne.CanvasObject {
 	h.loadFirstPage()
 
 	go h.watchUpdates()
-	go h.pollMissed()
 
 	return mainSplit
 }
@@ -629,9 +620,6 @@ func (h *historyTab) watchUpdates() {
 					h.mu.Unlock()
 					return
 				}
-			}
-			if tx.ID > h.maxID {
-				h.maxID = tx.ID
 			}
 			f := h.currentFilter()
 			show := matchesFilter(tx, f)
@@ -651,57 +639,6 @@ func (h *historyTab) watchUpdates() {
 			}
 			if isSelected {
 				h.showDetail(tx)
-			}
-		})
-	}
-}
-
-func (h *historyTab) pollMissed() {
-	defer recoverPanic("pollMissed")
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
-	for range ticker.C {
-		h.mu.RLock()
-		afterID := h.maxID
-		h.mu.RUnlock()
-
-		txs, err := h.projectStore.TransactionsSince(afterID)
-		if err != nil {
-			logger.Error("history: poll: %v", err)
-			continue
-		}
-		if len(txs) == 0 {
-			continue
-		}
-
-		fyne.Do(func() {
-			h.mu.Lock()
-			known := make(map[uint64]bool, len(h.displayed))
-			for _, r := range h.displayed {
-				known[r.ID] = true
-			}
-			f := h.currentFilter()
-			var added bool
-			for _, tx := range txs {
-				if known[tx.ID] {
-					continue
-				}
-				if tx.ID > h.maxID {
-					h.maxID = tx.ID
-				}
-				h.siteMap.add(tx)
-				if matchesFilter(tx, f) {
-					h.displayed = append([]store.Transaction{tx}, h.displayed...)
-					added = true
-				}
-			}
-			if added {
-				h.cursor = h.displayed[len(h.displayed)-1].ID
-			}
-			h.mu.Unlock()
-			h.tree.Refresh()
-			if added {
-				h.table.Refresh()
 			}
 		})
 	}

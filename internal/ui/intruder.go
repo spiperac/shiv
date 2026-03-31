@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"io"
 	"net"
 	"regexp"
 	"strconv"
@@ -160,18 +161,11 @@ func (t *intruderTab) build() fyne.CanvasObject {
 				return
 			}
 			defer readCloser.Close()
-			buf := new(strings.Builder)
-			data := make([]byte, 4096)
-			for {
-				n, readErr := readCloser.Read(data)
-				if n > 0 {
-					buf.Write(data[:n])
-				}
-				if readErr != nil {
-					break
-				}
+			data, err := io.ReadAll(readCloser)
+			if err != nil {
+				return
 			}
-			t.payloadEntry.SetText(buf.String())
+			t.payloadEntry.SetText(string(data))
 		}, t.win)
 		fileDialog.SetFilter(storage.NewExtensionFileFilter([]string{".txt"}))
 		fileDialog.Show()
@@ -609,7 +603,7 @@ func (t *intruderTab) stopAttack() {
 func (t *intruderTab) applyFilter() {
 	query := strings.ToLower(t.filterEntry.Text)
 
-	t.mu.RLock()
+	t.mu.Lock()
 	var filtered []intruderResult
 	for _, result := range t.results {
 		if query != "" {
@@ -620,9 +614,6 @@ func (t *intruderTab) applyFilter() {
 		}
 		filtered = append(filtered, result)
 	}
-	t.mu.RUnlock()
-
-	t.mu.Lock()
 	t.filtered = filtered
 	t.mu.Unlock()
 
