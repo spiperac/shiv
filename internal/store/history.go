@@ -240,6 +240,11 @@ func (s *Store) ClearHistory() error {
 		if err != nil {
 			return fmt.Errorf("store: clear history: %w", err)
 		}
+		_, err = s.db.Exec(`VACUUM`)
+		if err != nil {
+			return fmt.Errorf("store: VACUUM history: %w", err)
+		}
+
 		return nil
 	})
 }
