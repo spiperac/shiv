@@ -24,6 +24,7 @@ type Transaction struct {
 	StatusCode  int
 	RespHeaders http.Header
 	RespBody    []byte
+	RespSize    int
 	DurationMs  int64
 	TLS         bool
 	InScope     bool
@@ -75,13 +76,14 @@ func (s *Store) GetTransaction(id uint64) (*Transaction, error) {
 	err := s.db.QueryRow(`
 		SELECT id, timestamp, host, port, method, url, proto,
 		       req_headers, req_body, status_code, resp_headers,
-		       resp_body, duration_ms, tls, in_scope
+		       resp_body, duration_ms, tls, in_scope, resp_size
 		FROM history WHERE id = ?`, id,
 	).Scan(
 		&transaction.ID, &timestampStr, &transaction.Host, &transaction.Port,
 		&transaction.Method, &transaction.URL, &transaction.Proto,
 		&reqHeaders, &transaction.ReqBody, &transaction.StatusCode, &respHeaders,
 		&transaction.RespBody, &transaction.DurationMs, &tlsFlag, &scopeFlag,
+		&transaction.RespSize,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("store: get transaction %d: %w", id, err)
@@ -113,11 +115,12 @@ func (s *Store) Log(t Transaction) error {
 		if proto == "" {
 			proto = "HTTP/1.1"
 		}
+		respSize := len(t.RespBody)
 		res, err := s.db.Exec(`
 			INSERT INTO history
 				(timestamp, host, port, method, url, proto, req_headers, req_body,
-				 status_code, resp_headers, resp_body, duration_ms, tls, in_scope)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				 status_code, resp_headers, resp_body, duration_ms, tls, in_scope, resp_size)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			t.Timestamp.UTC().Format(time.RFC3339),
 			t.Host, t.Port, t.Method, t.URL, proto,
 			string(reqH), t.ReqBody,
@@ -125,6 +128,7 @@ func (s *Store) Log(t Transaction) error {
 			t.DurationMs,
 			boolToInt(t.TLS),
 			boolToInt(t.InScope),
+			respSize,
 		)
 		if err != nil {
 			return fmt.Errorf("store: log transaction: %w", err)
@@ -132,6 +136,7 @@ func (s *Store) Log(t Transaction) error {
 		id, _ := res.LastInsertId()
 		t.ID = uint64(id)
 		t.Proto = proto
+		t.RespSize = respSize
 		select {
 		case s.Updates <- t:
 		default:
@@ -184,7 +189,7 @@ func (s *Store) TransactionsPage(beforeID uint64, filter TransactionFilter) ([]T
 	query := `
 		SELECT id, timestamp, host, port, method, url, proto,
 		       req_headers, '' as req_body, status_code, resp_headers,
-		       '' as resp_body, duration_ms, tls, in_scope
+		       '' as resp_body, duration_ms, tls, in_scope, resp_size
 		FROM history`
 
 	if len(conditions) > 0 {
@@ -206,7 +211,7 @@ func (s *Store) TransactionsSince(afterID uint64) ([]Transaction, error) {
 	rows, err := s.db.Query(`
 		SELECT id, timestamp, host, port, method, url, proto,
 		       req_headers, '' as req_body, status_code, resp_headers,
-		       '' as resp_body, duration_ms, tls, in_scope
+		       '' as resp_body, duration_ms, tls, in_scope, resp_size
 		FROM history
 		WHERE id > ?
 		ORDER BY id DESC LIMIT 200`, afterID)
@@ -223,7 +228,7 @@ func (s *Store) AllTransactions() ([]Transaction, error) {
 	rows, err := s.db.Query(`
 		SELECT id, timestamp, host, port, method, url, proto,
 		       req_headers, req_body, status_code, resp_headers,
-		       resp_body, duration_ms, tls, in_scope
+		       resp_body, duration_ms, tls, in_scope, resp_size
 		FROM history
 		ORDER BY id DESC LIMIT 500`)
 	if err != nil {
@@ -263,6 +268,7 @@ func scanTransactions(rows interface {
 			&tx.ID, &ts, &tx.Host, &tx.Port, &tx.Method, &tx.URL, &tx.Proto,
 			&reqH, &tx.ReqBody, &tx.StatusCode, &respH,
 			&tx.RespBody, &tx.DurationMs, &tlsInt, &scopeInt,
+			&tx.RespSize,
 		); err != nil {
 			return nil, fmt.Errorf("store: scan transaction: %w", err)
 		}

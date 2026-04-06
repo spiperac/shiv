@@ -73,18 +73,12 @@ func (p *Proxy) Start() error {
 }
 
 func (p *Proxy) Restart(newAddr string) error {
-	p.mu.Lock()
-	srv := p.srv
-	p.mu.Unlock()
-
-	if srv != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = srv.Shutdown(ctx)
+	ln, err := net.Listen("tcp", newAddr)
+	if err != nil {
+		return fmt.Errorf("proxy: listen on %s: %w", newAddr, err)
 	}
 
 	newSrv := &http.Server{
-		Addr:         newAddr,
 		Handler:      p,
 		ReadTimeout:  60 * time.Second,
 		WriteTimeout: 60 * time.Second,
@@ -92,15 +86,24 @@ func (p *Proxy) Restart(newAddr string) error {
 	}
 
 	p.mu.Lock()
+	oldSrv := p.srv
 	p.addr = newAddr
 	p.srv = newSrv
 	p.mu.Unlock()
 
+	if oldSrv != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = oldSrv.Shutdown(ctx)
+	}
+	p.closeAllConns()
+
 	go func() {
-		if err := newSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logger.Error("proxy: ListenAndServe: %v", err)
+		if err := newSrv.Serve(ln); err != nil && err != http.ErrServerClosed {
+			logger.Error("proxy: Serve: %v", err)
 		}
 	}()
+
 	return nil
 }
 

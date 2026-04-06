@@ -731,7 +731,7 @@ func (h *historyTab) cellText(tx store.Transaction, col int) string {
 	case 3:
 		return fmt.Sprintf("%d", tx.StatusCode)
 	case 4:
-		return fmt.Sprintf("%db", len(tx.RespBody))
+		return formatSize(tx.RespSize)
 	case 5:
 		return fmt.Sprintf("%dms", tx.DurationMs)
 	case 6:

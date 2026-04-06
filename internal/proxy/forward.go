@@ -9,7 +9,9 @@ import (
 )
 
 var upstreamClient = &http.Client{
-	Timeout: 30 * time.Second,
+	Transport: &http.Transport{
+		ResponseHeaderTimeout: 30 * time.Second,
+	},
 	CheckRedirect: func(req *http.Request, via []*http.Request) error {
 		return http.ErrUseLastResponse
 	},

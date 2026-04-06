@@ -106,6 +106,9 @@ func (p *Proxy) handleWebSocketTLS(
 		return
 	}
 	defer browserConn.Close()
+	const wsMaxMessageSize = 16 << 20 // 16 MB
+	browserConn.SetReadLimit(wsMaxMessageSize)
+	upstreamConn.SetReadLimit(wsMaxMessageSize)
 
 	// ── 3. Emit connection event ──────────────────────────────────────────────
 

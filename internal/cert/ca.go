@@ -213,6 +213,10 @@ func loadFromDisk(keyPath, crtPath string) (*CA, error) {
 		return nil, fmt.Errorf("cert: CA cert parse: %w", err)
 	}
 
+	if time.Now().After(parsedCert.NotAfter) {
+		return generate(keyPath, crtPath)
+	}
+
 	return &CA{cert: parsedCert, key: caKey}, nil
 }
 

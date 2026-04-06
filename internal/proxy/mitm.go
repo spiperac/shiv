@@ -172,8 +172,12 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		internalhttp.StripResponseCacheHeaders(resp.Header)
 		resp.Body = io.NopCloser(reader)
 
-		if err := resp.Write(browserTLS); err != nil {
-			logger.Debug("mitm: write response to browser for %s: %v", bareHost, err)
+		writeErr := resp.Write(browserTLS)
+		_, _ = io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+
+		if writeErr != nil {
+			logger.Debug("mitm: write response to browser for %s: %v", bareHost, writeErr)
 			return
 		}
 

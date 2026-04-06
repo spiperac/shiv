@@ -125,6 +125,7 @@ func (s *Store) migrate() error {
 		`ALTER TABLE history ADD COLUMN proto TEXT NOT NULL DEFAULT 'HTTP/1.1'`,
 		`ALTER TABLE history ADD COLUMN port INTEGER NOT NULL DEFAULT 443`,
 		`ALTER TABLE repeater_tabs ADD COLUMN tab_type TEXT NOT NULL DEFAULT 'http'`,
+		`ALTER TABLE history ADD COLUMN resp_size INTEGER NOT NULL DEFAULT 0`,
 	}
 	for _, migration := range migrations {
 		s.db.Exec(migration)
@@ -151,6 +152,7 @@ CREATE TABLE IF NOT EXISTS history (
 	status_code  INTEGER,
 	resp_headers TEXT,
 	resp_body    BLOB,
+	resp_size    INTEGER NOT NULL DEFAULT 0,
 	duration_ms  INTEGER,
 	tls          INTEGER DEFAULT 0,
 	in_scope     INTEGER DEFAULT 1

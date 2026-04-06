@@ -190,6 +190,10 @@ func (r *repeaterTab) buildHTTPTabItem(tab store.RepeaterTab) *container.TabItem
 		}
 		rawReq := reqEditor.GetText()
 		host, port, useTLS := internalhttp.ParseHostFromRaw(rawReq)
+		if host == "" {
+			respLabel.SetText("Error: no Host header found in request")
+			return
+		}
 		sendBtn.Disable()
 		go func() {
 			start := time.Now()

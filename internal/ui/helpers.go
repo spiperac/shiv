@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 
 	"fyne.io/fyne/v2"
@@ -40,4 +41,15 @@ func hasSuffix(s string, suffixes ...string) bool {
 		}
 	}
 	return false
+}
+
+func formatSize(bytes int) string {
+	switch {
+	case bytes >= 1<<20:
+		return fmt.Sprintf("%.1fMB", float64(bytes)/float64(1<<20))
+	case bytes >= 1<<10:
+		return fmt.Sprintf("%.1fKB", float64(bytes)/float64(1<<10))
+	default:
+		return fmt.Sprintf("%dB", bytes)
+	}
 }

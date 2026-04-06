@@ -286,7 +286,7 @@ func rewriteHeaders(raw string, jar map[string]string) string {
 
 	// Append Content-Length based on actual byte length of the body.
 	if len(body) > 0 {
-		out = append(out, fmt.Sprintf("Content-Length: %d", len([]byte(body))))
+		out = append(out, fmt.Sprintf("Content-Length: %d", len(body)))
 	}
 
 	return strings.Join(out, "\r\n") + "\r\n\r\n" + body

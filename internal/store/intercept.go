@@ -153,7 +153,13 @@ func (g *InterceptGate) Hold(req *http.Request, body []byte) (*http.Request, []b
 
 	// We hold the semaphore and bypass is open. Put the request in the queue.
 	pending := newPendingRequest(req, body)
-	g.queue <- pending
+	select {
+	case g.queue <- pending:
+	case <-bypass:
+		pending.Cancel()
+		<-g.sem
+		return req, body, true
+	}
 
 	// Wait for the user's decision or a bypass signal.
 	select {

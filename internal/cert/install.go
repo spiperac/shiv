@@ -87,7 +87,7 @@ func installDarwin(certPath string) (string, error) {
 
 	loginKeychain := filepath.Join(home, "Library", "Keychains", "login.keychain-db")
 	cmd := exec.Command("security", "add-trusted-cert",
-		"-d", "-r", "trustRoot",
+		"-r", "trustRoot",
 		"-k", loginKeychain,
 		certPath,
 	)
