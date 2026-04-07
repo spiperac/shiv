@@ -57,22 +57,7 @@ func (p *Proxy) closeAllConns() {
 	})
 }
 
-func (p *Proxy) Start() error {
-	p.mu.Lock()
-	srv := &http.Server{
-		Addr:         p.addr,
-		Handler:      p,
-		ReadTimeout:  60 * time.Second,
-		WriteTimeout: 60 * time.Second,
-		IdleTimeout:  120 * time.Second,
-	}
-	p.srv = srv
-	p.mu.Unlock()
-
-	return srv.ListenAndServe()
-}
-
-func (p *Proxy) Restart(newAddr string) error {
+func (p *Proxy) Start(newAddr string) error {
 	ln, err := net.Listen("tcp", newAddr)
 	if err != nil {
 		return fmt.Errorf("proxy: listen on %s: %w", newAddr, err)
@@ -127,7 +112,7 @@ func (p *Proxy) Stop() {
 
 // ObserveProxyRestart implements events.ProxyCommandObserver.
 func (p *Proxy) ObserveProxyRestart(e events.ProxyRestartEvent) {
-	_ = p.Restart(e.Addr)
+	_ = p.Start(e.Addr)
 }
 
 // ObserveProxyStop implements events.ProxyCommandObserver.

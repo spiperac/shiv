@@ -168,7 +168,6 @@ func LaunchBrowser(fyneApp fyne.App, browser DetectedBrowser, proxyHost string, 
 		// Chromium-based — profile dir is created automatically by the browser.
 		args = []string{
 			"--proxy-server=http://" + proxyAddr,
-			"--ignore-certificate-errors",
 			"--user-data-dir=" + profile,
 			"--no-first-run",
 			"--no-default-browser-check",

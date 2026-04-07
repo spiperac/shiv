@@ -106,6 +106,10 @@ func main() {
 			bus.EmitProxyRestart(events.ProxyRestartEvent{Addr: proxyAddr})
 		}
 
+		fyneApp.Lifecycle().SetOnStopped(func() {
+			projectStore.Close()
+		})
+
 		ui.ShowMainWindow(fyneApp, projectStore, bus, launchWin)
 	})
 
