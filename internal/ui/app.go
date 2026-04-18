@@ -7,6 +7,8 @@ import (
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/data/binding"
+	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/storage"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
@@ -70,14 +72,14 @@ func setProxyStatus(prefs fyne.Preferences, running bool) {
 	}
 }
 
-func ShowMainWindow(fyneApp fyne.App, projectStore *store.Store, bus *events.Bus, launchWin fyne.Window) {
+func ShowMainWindow(fyneApp fyne.App, projectStore *store.Store, bus *events.Bus, launchWin fyne.Window, onSwitchProject func(string)) {
 	prefs := fyneApp.Preferences()
 
 	mainWin := fyneApp.NewWindow("Shiv")
 	mainWin.Resize(fyne.NewSize(1280, 800))
-	mainWin.SetMaster()
 	mainWin.SetIcon(fyne.NewStaticResource("logo.png", assets.Logo))
 
+	mainWin.SetMaster()
 	applyTheme(fyneApp)
 
 	browserBtn := widget.NewButtonWithIcon("", AppIcon("web"), func() {
@@ -160,10 +162,52 @@ func ShowMainWindow(fyneApp fyne.App, projectStore *store.Store, bus *events.Bus
 		launchDefaultBrowser(fyneApp, mainWin)
 	})
 
+	newProjectItem := fyne.NewMenuItem("New Project", func() {
+		d := dialog.NewFileSave(func(wc fyne.URIWriteCloser, err error) {
+			if err != nil || wc == nil {
+				return
+			}
+			wc.Close()
+			path := wc.URI().Path()
+			saveRecent(path)
+			mainWin.Hide()
+			onSwitchProject(path)
+		}, mainWin)
+		d.SetFileName("untitled.shiv")
+		d.SetFilter(storage.NewExtensionFileFilter([]string{".shiv"}))
+		d.Show()
+	})
+	newProjectItem.Icon = theme.DocumentCreateIcon()
+
+	openProjectItem := fyne.NewMenuItem("Open Project", func() {
+		d := dialog.NewFileOpen(func(rc fyne.URIReadCloser, err error) {
+			if err != nil || rc == nil {
+				return
+			}
+			rc.Close()
+			path := rc.URI().Path()
+			saveRecent(path)
+			mainWin.Hide()
+			onSwitchProject(path)
+		}, mainWin)
+		d.SetFilter(storage.NewExtensionFileFilter([]string{".shiv"}))
+		d.Show()
+	})
+	openProjectItem.Icon = theme.FolderOpenIcon()
+
+	quitItem := fyne.NewMenuItem("Quit", func() {
+		fyneApp.Quit()
+	})
+
 	menuItems := []*fyne.MenuItem{
+		newProjectItem,
+		openProjectItem,
+		fyne.NewMenuItemSeparator(),
 		launchBrowserMenuItem,
 		toggleThemeMenuItem,
 		settingsMenuItem,
+		fyne.NewMenuItemSeparator(),
+		quitItem,
 	}
 	if lt := loadActiveTheme(fyneApp); lt != nil && !lt.HasBoth {
 		toggleThemeMenuItem.Disabled = true
@@ -188,5 +232,7 @@ func ShowMainWindow(fyneApp fyne.App, projectStore *store.Store, bus *events.Bus
 		optionsBar,
 	))
 	mainWin.Show()
-	launchWin.Close()
+	if launchWin != nil {
+		launchWin.Close()
+	}
 }

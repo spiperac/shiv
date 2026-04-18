@@ -50,7 +50,8 @@ func main() {
 	fyneApp := app.NewWithID("net.shivapp")
 	fyneApp.SetIcon(fyne.NewStaticResource("logo.png", assets.Logo))
 
-	ui.ShowLaunchScreen(fyneApp, func(projectPath string, launchWin fyne.Window) {
+	var openProject func(string, fyne.Window)
+	openProject = func(projectPath string, launchWin fyne.Window) {
 		if projectPath == "" {
 			fyneApp.Quit()
 			return
@@ -89,7 +90,7 @@ func main() {
 			return
 		}
 
-		if proxyServer.CA().Fresh() {
+		if proxyServer.CA().Fresh() && launchWin != nil {
 			go func() {
 				msg, err := proxyServer.CA().InstallCA()
 				fyne.Do(func() {
@@ -106,12 +107,17 @@ func main() {
 			bus.EmitProxyRestart(events.ProxyRestartEvent{Addr: proxyAddr})
 		}
 
-		fyneApp.Lifecycle().SetOnStopped(func() {
+		ui.ShowMainWindow(fyneApp, projectStore, bus, launchWin, func(newPath string) {
+			bus.EmitProxyStop(events.ProxyStopEvent{})
+			if engine != nil {
+				engine.Close()
+			}
 			projectStore.Close()
+			openProject(newPath, nil)
 		})
+	}
 
-		ui.ShowMainWindow(fyneApp, projectStore, bus, launchWin)
-	})
+	ui.ShowLaunchScreen(fyneApp, openProject)
 
 	fyneApp.Run()
 }
