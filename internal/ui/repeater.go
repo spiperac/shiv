@@ -11,6 +11,7 @@ import (
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
@@ -440,6 +441,77 @@ func (r *repeaterTab) buildWSTabItem(tab store.RepeaterTab) *container.TabItem {
 	var connState wsConnState
 	var connID uint64
 
+	// ── custom headers ────────────────────────────────────────────────────────
+
+	type headerRow struct {
+		key   string
+		value string
+	}
+	var customHeaders []headerRow
+
+	showHeadersDialog := func() {
+		// local copy to edit, committed only on Save
+		editHeaders := make([]headerRow, len(customHeaders))
+		copy(editHeaders, customHeaders)
+
+		var rows *fyne.Container
+		var rebuildRows func()
+
+		rebuildRows = func() {
+			rows.RemoveAll()
+			for i := range editHeaders {
+				idx := i
+				keyEntry := widget.NewEntry()
+				keyEntry.SetPlaceHolder("Header-Name")
+				keyEntry.SetText(editHeaders[idx].key)
+				keyEntry.OnChanged = func(v string) { editHeaders[idx].key = v }
+
+				valEntry := widget.NewEntry()
+				valEntry.SetPlaceHolder("value")
+				valEntry.SetText(editHeaders[idx].value)
+				valEntry.OnChanged = func(v string) { editHeaders[idx].value = v }
+
+				deleteBtn := widget.NewButtonWithIcon("", theme.DeleteIcon(), func() {
+					editHeaders = append(editHeaders[:idx], editHeaders[idx+1:]...)
+					rebuildRows()
+				})
+
+				rows.Add(container.NewBorder(nil, nil, nil, deleteBtn,
+					container.NewGridWithColumns(2, keyEntry, valEntry),
+				))
+			}
+			rows.Refresh()
+		}
+
+		rows = container.NewVBox()
+		rebuildRows()
+
+		addBtn := widget.NewButtonWithIcon("Add Header", theme.ContentAddIcon(), func() {
+			editHeaders = append(editHeaders, headerRow{})
+			rebuildRows()
+		})
+
+		scrolled := container.NewVScroll(rows)
+		scrolled.SetMinSize(fyne.NewSize(500, 240))
+
+		body := container.NewBorder(nil, addBtn, nil, nil, scrolled)
+
+		dialog.ShowCustomConfirm("Edit Request Headers", "Save", "Cancel", body, func(save bool) {
+			if !save {
+				return
+			}
+			// drop empty rows
+			customHeaders = customHeaders[:0]
+			for _, h := range editHeaders {
+				if strings.TrimSpace(h.key) != "" {
+					customHeaders = append(customHeaders, h)
+				}
+			}
+		}, r.win)
+	}
+
+	// ── url + connect controls ────────────────────────────────────────────────
+
 	urlEntry := widget.NewEntry()
 	urlEntry.SetPlaceHolder("wss://host:port/path")
 	if tab.RawRequest != "" {
@@ -456,7 +528,7 @@ func (r *repeaterTab) buildWSTabItem(tab store.RepeaterTab) *container.TabItem {
 	frameColumns := []widgets.DataTableColumn{
 		{Header: "Dir", Width: 80},
 		{Header: "Time", Width: 120},
-		{Header: "Payload", Width: 500},
+		{Header: "Payload", Width: 300},
 	}
 
 	frameTable := widgets.NewDataTable()
@@ -489,6 +561,26 @@ func (r *repeaterTab) buildWSTabItem(tab store.RepeaterTab) *container.TabItem {
 		return widget.SuccessImportance
 	}
 
+	// ── payload detail view ───────────────────────────────────────────────────
+
+	payloadView := widgets.NewTextView()
+	payloadView.SetWindow(r.win)
+	payloadView.SetPlaceHolder("Select a frame to view full payload...")
+
+	frameTable.OnSelect = func(row int) {
+		if row >= len(frames) {
+			return
+		}
+		p := frames[row].payload
+		if p == "" {
+			payloadView.SetText("(empty)")
+		} else {
+			payloadView.SetText(p)
+		}
+	}
+
+	// ── send controls ─────────────────────────────────────────────────────────
+
 	payloadEntry := widget.NewMultiLineEntry()
 	payloadEntry.SetPlaceHolder("Message to send...")
 	payloadEntry.SetMinRowsVisible(3)
@@ -502,6 +594,11 @@ func (r *repeaterTab) buildWSTabItem(tab store.RepeaterTab) *container.TabItem {
 	clearBtn := widget.NewButtonWithIcon("Clear", AppIcon("delete"), func() {
 		frames = nil
 		frameTable.Refresh()
+		payloadView.SetText("")
+	})
+
+	headersBtn := widget.NewButtonWithIcon("Headers", theme.ListIcon(), func() {
+		showHeadersDialog()
 	})
 
 	updateConnectBtn := func() {
@@ -550,6 +647,7 @@ func (r *repeaterTab) buildWSTabItem(tab store.RepeaterTab) *container.TabItem {
 								ts:        time.Now(),
 							})
 							frameTable.Refresh()
+							frameTable.OnSelect(len(frames) - 1)
 						}
 					})
 					return
@@ -570,6 +668,7 @@ func (r *repeaterTab) buildWSTabItem(tab store.RepeaterTab) *container.TabItem {
 					frames = append(frames, f)
 					frameTable.Refresh()
 					frameTable.ScrollToRow(len(frames) - 1)
+					frameTable.OnSelect(len(frames) - 1)
 				})
 			}
 		}()
@@ -588,6 +687,15 @@ func (r *repeaterTab) buildWSTabItem(tab store.RepeaterTab) *container.TabItem {
 		updateConnectBtn()
 		_ = r.projectStore.UpdateRepeaterTab(tabID, rawURL, "")
 
+		// build http.Header from customHeaders
+		reqHeader := http.Header{}
+		for _, h := range customHeaders {
+			if strings.TrimSpace(h.key) != "" {
+				cleaned := strings.NewReplacer("\n", "", "\r", "").Replace(h.value)
+				reqHeader.Set(h.key, cleaned)
+			}
+		}
+
 		go func() {
 			dialer := websocket.Dialer{
 				TLSClientConfig:  &tls.Config{InsecureSkipVerify: true}, //nolint:gosec
@@ -596,13 +704,14 @@ func (r *repeaterTab) buildWSTabItem(tab store.RepeaterTab) *container.TabItem {
 					return net.DialTimeout(network, addr, 10*time.Second)
 				},
 			}
-			conn, _, err := dialer.Dial(rawURL, nil)
+			conn, _, err := dialer.Dial(rawURL, reqHeader)
 			fyne.Do(func() {
 				if err != nil {
 					connState = wsDisconnected
 					updateConnectBtn()
 					frames = append(frames, wsFrame{direction: "⚠ Error", payload: err.Error(), ts: time.Now()})
 					frameTable.Refresh()
+					frameTable.OnSelect(len(frames) - 1)
 					return
 				}
 				wsConn = conn
@@ -618,6 +727,7 @@ func (r *repeaterTab) buildWSTabItem(tab store.RepeaterTab) *container.TabItem {
 				}
 				frames = append(frames, wsFrame{direction: "✓ Connected", payload: rawURL, ts: time.Now()})
 				frameTable.Refresh()
+				frameTable.OnSelect(len(frames) - 1)
 				startReadLoop(conn)
 			})
 		}()
@@ -627,7 +737,7 @@ func (r *repeaterTab) buildWSTabItem(tab store.RepeaterTab) *container.TabItem {
 		if wsConn == nil || connState != wsConnected {
 			return
 		}
-		payload := payloadEntry.Text
+		payload := strings.ReplaceAll(strings.ReplaceAll(payloadEntry.Text, "\r\n", ""), "\n", "")
 		if payload == "" {
 			return
 		}
@@ -645,33 +755,43 @@ func (r *repeaterTab) buildWSTabItem(tab store.RepeaterTab) *container.TabItem {
 				finalPayload = result.Payload
 			}
 			err := conn.WriteMessage(websocket.TextMessage, finalPayload)
+			logger.Info("ws: sending payload bytes: %q", finalPayload)
 			fyne.Do(func() {
 				if err != nil {
 					frames = append(frames, wsFrame{direction: "⚠ Error", payload: "send failed: " + err.Error(), ts: time.Now()})
 					frameTable.Refresh()
+					frameTable.OnSelect(len(frames) - 1)
 					return
 				}
 				frames = append(frames, wsFrame{direction: "→ Sent", payload: string(finalPayload), ts: time.Now()})
 				frameTable.Refresh()
 				frameTable.ScrollToRow(len(frames) - 1)
+				frameTable.OnSelect(len(frames) - 1)
 			})
 		}()
 	}
 
+	// ── layout ────────────────────────────────────────────────────────────────
+
 	toolbar := container.NewBorder(nil, nil,
-		container.NewHBox(connectBtn, clearBtn),
+		container.NewHBox(connectBtn, clearBtn, headersBtn),
 		nil,
 		urlEntry,
 	)
 
 	sendBar := container.NewBorder(nil, nil, nil, sendFrameBtn, payloadEntry)
+
 	framePane := container.NewBorder(newBoldLabel("Frames"), nil, nil, nil, frameTable.Build())
+	payloadPane := container.NewBorder(newBoldLabel("Payload"), nil, nil, nil, payloadView.Build())
+
+	frameSplit := container.NewVSplit(framePane, payloadPane)
+	frameSplit.SetOffset(0.6)
 
 	content := container.NewBorder(
 		container.New(layout.NewCustomPaddedLayout(8, 0, 0, 0), toolbar),
-		container.NewBorder(nil, nil, newBoldLabel("Message"), nil, sendBar),
+		container.NewBorder(nil, nil, nil, nil, sendBar),
 		nil, nil,
-		framePane,
+		frameSplit,
 	)
 
 	tabItem := container.NewTabItem(tab.Name, content)
