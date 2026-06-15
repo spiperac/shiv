@@ -74,9 +74,13 @@ func showScopeDialog(projectStore *store.Store, win fyne.Window, onChanged func(
 		}
 		if err := projectStore.AddScopeEntry(host); err != nil {
 			logger.Error("scope: add entry: %v", err)
+			dialog.ShowError(err, win)
 			return
 		}
-		newEntries, _ := projectStore.AllScopeEntries()
+		newEntries, err := projectStore.AllScopeEntries()
+		if err != nil {
+			logger.Error("scope: reload entries: %v", err)
+		}
 		rows = make([]row, len(newEntries))
 		for i, entry := range newEntries {
 			rows[i] = row{entry.ID, entry.Host}
@@ -94,9 +98,13 @@ func showScopeDialog(projectStore *store.Store, win fyne.Window, onChanged func(
 		entryId := rows[selectedIdx].id
 		if err := projectStore.DeleteScopeEntry(entryId); err != nil {
 			logger.Error("scope: delete entry: %v", err)
+			dialog.ShowError(err, win)
 			return
 		}
-		newEntries, _ := projectStore.AllScopeEntries()
+		newEntries, err := projectStore.AllScopeEntries()
+		if err != nil {
+			logger.Error("scope: reload entries: %v", err)
+		}
 		rows = make([]row, len(newEntries))
 		for i, e := range newEntries {
 			rows[i] = row{e.ID, e.Host}

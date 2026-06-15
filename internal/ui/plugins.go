@@ -11,6 +11,7 @@ import (
 	"fyne.io/fyne/v2/widget"
 
 	"github.com/shiv/internal/events"
+	"github.com/shiv/internal/logger"
 	"github.com/shiv/internal/store"
 	"github.com/shiv/internal/ui/widgets"
 )
@@ -53,6 +54,7 @@ func (t *pluginsTab) build() fyne.CanvasObject {
 	refreshAll := func() {
 		entries, err := t.projectStore.AllPlugins()
 		if err != nil {
+			logger.Error("plugins: load: %v", err)
 			return
 		}
 		plugins = entries

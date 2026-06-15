@@ -23,6 +23,7 @@ import (
 	"fyne.io/fyne/v2/widget"
 
 	internalhttp "github.com/shiv/internal/http"
+	"github.com/shiv/internal/logger"
 	"github.com/shiv/internal/store"
 	"github.com/shiv/internal/ui/widgets"
 )
@@ -197,6 +198,8 @@ func (t *intruderTab) buildRequestPane() fyne.CanvasObject {
 			defer readCloser.Close()
 			data, err := io.ReadAll(readCloser)
 			if err != nil {
+				logger.Error("intruder: read payloads file: %v", err)
+				dialog.ShowError(err, t.win)
 				return
 			}
 			t.payloadEntry.SetText(string(data))
