@@ -1,0 +1,103 @@
+package store
+
+import (
+	"fmt"
+	"time"
+)
+
+type LootEntry struct {
+	ID          int64
+	Title       string
+	Severity    string
+	Notes       string
+	HistoryID   *uint64
+	RawRequest  string
+	RawResponse string
+	CreatedAt   time.Time
+}
+
+func (s *Store) AllLoot() ([]LootEntry, error) {
+	rows, err := s.db.Query(`
+		SELECT id, title, severity, notes, history_id, raw_request, raw_response, created_at
+		FROM loot ORDER BY 
+		CASE severity
+			WHEN 'Critical' THEN 1
+			WHEN 'High' THEN 2
+			WHEN 'Medium' THEN 3
+			WHEN 'Low' THEN 4
+			WHEN 'Info' THEN 5
+			ELSE 6
+		END ASC, id DESC`)
+	if err != nil {
+		return nil, fmt.Errorf("store: query loot: %w", err)
+	}
+	defer rows.Close()
+
+	var entries []LootEntry
+	for rows.Next() {
+		var entry LootEntry
+		var histID *int64
+		var timestampStr string
+		if err := rows.Scan(&entry.ID, &entry.Title, &entry.Severity, &entry.Notes, &histID, &entry.RawRequest, &entry.RawResponse, &timestampStr); err != nil {
+			return nil, fmt.Errorf("store: scan loot: %w", err)
+		}
+		if histID != nil {
+			histIDUint := uint64(*histID)
+			entry.HistoryID = &histIDUint
+		}
+		entry.CreatedAt, _ = time.Parse(time.RFC3339, timestampStr)
+		entries = append(entries, entry)
+	}
+	return entries, rows.Err()
+}
+
+func (s *Store) AddLoot(entry LootEntry) (int64, error) {
+	var id int64
+	err := s.write(func() error {
+		var histID any
+		if entry.HistoryID != nil {
+			histID = *entry.HistoryID
+		}
+		result, err := s.db.Exec(`
+			INSERT INTO loot (title, severity, notes, history_id, raw_request, raw_response, created_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			entry.Title, entry.Severity, entry.Notes, histID,
+			entry.RawRequest, entry.RawResponse,
+			time.Now().UTC().Format(time.RFC3339),
+		)
+		if err != nil {
+			return fmt.Errorf("store: add loot: %w", err)
+		}
+		id, err = result.LastInsertId()
+		return err
+	})
+	if err != nil {
+		return 0, err
+	}
+	s.notifyLoot()
+	return id, nil
+}
+
+func (s *Store) DeleteLoot(id int64) error {
+	err := s.write(func() error {
+		_, err := s.db.Exec(`DELETE FROM loot WHERE id = ?`, id)
+		if err != nil {
+			return fmt.Errorf("store: delete loot: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	s.notifyLoot()
+	return nil
+}
+
+// notifyLoot signals the UI that loot state has changed.
+// Non-blocking — a full buffer means the UI is already scheduled to reload.
+func (s *Store) notifyLoot() {
+	select {
+	case s.LootEntries <- struct{}{}:
+	default:
+	}
+}

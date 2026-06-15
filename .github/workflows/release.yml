@@ -1,0 +1,99 @@
+name: Release Build
+on:
+  release:
+    types: [created]
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+      - name: Install Fyne
+        run: go install fyne.io/tools/cmd/fyne@latest
+      - name: Install Linux deps
+        run: sudo apt-get update && sudo apt-get install -y libgl1-mesa-dev xorg-dev
+      - name: Package for Linux
+        run: fyne package -os linux
+      - name: Upload to release
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: ./Shiv.tar.xz
+          asset_name: Shiv-linux.tar.xz
+          asset_content_type: application/x-xz
+
+  build-windows:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+      - name: Install MinGW
+        run: sudo apt-get update && sudo apt-get install -y gcc-mingw-w64-x86-64
+      - name: Install Fyne
+        run: go install fyne.io/tools/cmd/fyne@latest
+      - name: Package for Windows
+        run: |
+          export CC=x86_64-w64-mingw32-gcc
+          fyne package -os windows
+      - uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: ./Shiv.exe
+          asset_name: Shiv-windows.exe
+          asset_content_type: application/vnd.microsoft.portable-executable
+
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+      - name: Install Fyne
+        run: go install fyne.io/tools/cmd/fyne@latest
+
+      - name: Package for macOS arm64
+        run: GOARCH=arm64 fyne package -os darwin
+
+      - name: Move arm64 binary
+        run: mv Shiv.app/Contents/MacOS/Shiv Shiv.app/Contents/MacOS/Shiv-arm64
+
+      - name: Package for macOS amd64
+        run: GOARCH=amd64 fyne package -os darwin
+
+      - name: Move amd64 binary
+        run: mv Shiv.app/Contents/MacOS/Shiv Shiv.app/Contents/MacOS/Shiv-amd64
+
+      - name: Create universal binary with lipo
+        run: |
+          lipo -create \
+            Shiv.app/Contents/MacOS/Shiv-arm64 \
+            Shiv.app/Contents/MacOS/Shiv-amd64 \
+            -output Shiv.app/Contents/MacOS/Shiv
+          rm Shiv.app/Contents/MacOS/Shiv-arm64 Shiv.app/Contents/MacOS/Shiv-amd64
+
+      - name: Zip the app
+        run: zip -r Shiv-macos.zip Shiv.app
+
+      - name: Upload to release
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: ./Shiv-macos.zip
+          asset_name: Shiv-macos.zip
+          asset_content_type: application/zip

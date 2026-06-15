@@ -1,0 +1,8 @@
+Website = "https://github.com/spiperac/shiv"
+
+[Details]
+Icon = "assets/logo.png"
+Name = "Shiv"
+ID = "net.shivapp"
+Version = "0.1.0"
+Build = 9

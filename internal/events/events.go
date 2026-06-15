@@ -1,0 +1,122 @@
+package events
+
+import (
+	"net/http"
+	"time"
+)
+
+// RequestEvent carries a fully-read HTTP request and its body, ready to be
+// forwarded. The proxy emits this before forwarding. Consumers may inspect
+// or modify the request. The result controls whether forwarding proceeds.
+type RequestEvent struct {
+	Request *http.Request
+	Body    []byte
+}
+
+// ResponseEvent carries a completed HTTP transaction. The proxy emits this
+// after the upstream response is fully received and the body is decompressed.
+// All fields are populated; no further store knowledge is required.
+type ResponseEvent struct {
+	Timestamp   time.Time
+	Host        string
+	Proto       string // "HTTP/1.1" or "HTTP/2"
+	Method      string
+	URL         string
+	ReqHeaders  http.Header
+	ReqBody     []byte
+	StatusCode  int
+	RespHeaders http.Header
+	RespBody    []byte // decompressed; nil if binary
+	DurationMs  int64
+	TLS         bool
+}
+
+// RequestResult is returned by RequestMiddleware. If Drop is true the proxy
+// sends a 403 and does not forward. Request and Body are the (possibly
+// modified) request to forward when Drop is false.
+type RequestResult struct {
+	Drop    bool
+	Request *http.Request
+	Body    []byte
+}
+
+// WebSocketDirection indicates which endpoint sent a frame.
+type WebSocketDirection int
+
+const (
+	WebSocketClient WebSocketDirection = 0 // browser → server
+	WebSocketServer WebSocketDirection = 1 // server → browser
+)
+
+// WebSocketOpcode mirrors gorilla/websocket message type constants.
+type WebSocketOpcode int
+
+const (
+	WebSocketText   WebSocketOpcode = 1
+	WebSocketBinary WebSocketOpcode = 2
+	WebSocketPing   WebSocketOpcode = 9
+	WebSocketPong   WebSocketOpcode = 10
+	WebSocketClose  WebSocketOpcode = 8
+)
+
+// WebSocketConnectionEvent is emitted once when a WebSocket upgrade handshake
+// completes successfully. The proxy emits this after the upstream dial and
+// browser upgrade both succeed.
+type WebSocketConnectionEvent struct {
+	Host      string
+	URL       string
+	TLS       bool
+	Timestamp time.Time
+}
+
+// WebSocketFrameResult is returned by WebSocketFrameObserver. Payload is the
+// (possibly modified) payload to forward. If Payload is nil the original is used.
+type WebSocketFrameResult struct {
+	Payload []byte
+}
+
+// WebSocketFrameEvent is emitted for every proxied WebSocket frame in either
+// direction. ConnectionID is the value returned by the
+// WebSocketConnectionObserver that handled the corresponding
+// WebSocketConnectionEvent.
+type WebSocketFrameEvent struct {
+	ConnectionID uint64
+	Timestamp    time.Time
+	Direction    WebSocketDirection
+	Opcode       WebSocketOpcode
+	Payload      []byte
+}
+
+// PluginLogEvent is emitted by the plugin engine when a Lua plugin calls
+// log(). The store observes it, buffers the line in memory, and notifies
+// the UI via the PluginEntries channel.
+type PluginLogEvent struct {
+	Name    string // plugin filename (e.g. "myplugin.lua")
+	Message string
+}
+
+// SetPluginEnabledEvent is emitted by the UI when the user toggles a plugin.
+// The engine observes it to skip or include that plugin's hooks.
+// The store observes it to persist the new state to the database.
+type SetPluginEnabledEvent struct {
+	Name    string // plugin filename
+	Enabled bool
+}
+
+// LoadPluginEvent is emitted by the UI when the user selects a .lua file to
+// import. The engine observes it, copies the file into the plugins directory,
+// loads it, and registers it for subsequent hook calls.
+type LoadPluginEvent struct {
+	SourcePath string // absolute path to the selected .lua file
+}
+
+// ProxyRestartEvent is emitted by the UI when the user saves proxy settings
+// or toggles the proxy on. Addr is the new listen address (host:port).
+// The proxy observes this and restarts on the new address.
+type ProxyRestartEvent struct {
+	Addr string
+}
+
+// ProxyStopEvent is emitted by the UI when the user toggles the proxy off.
+// The proxy observes this and stops listening.
+type ProxyStopEvent struct{}
