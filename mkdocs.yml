@@ -1,0 +1,39 @@
+site_name: Shiv
+site_url: https://spiperac.github.io/shiv
+site_description: Desktop HTTP/HTTPS interception proxy for web security testing
+repo_url: https://github.com/spiperac/shiv
+repo_name: spiperac/shiv
+
+theme:
+  name: material
+  palette:
+    scheme: slate
+    primary: red
+    accent: red
+  features:
+    - navigation.sections
+    - navigation.indexes
+    - navigation.top
+    - content.code.copy
+
+nav:
+  - Overview: index.md
+  - Getting Started: getting-started.md
+  - Features:
+    - History: features/history.md
+    - Intercept: features/intercept.md
+    - Repeater: features/repeater.md
+    - Intruder: features/intruder.md
+    - Decoder: features/decoder.md
+    - Loot: features/loot.md
+    - Scope: features/scope.md
+  - Plugins: plugins.md
+  - Building from Source: building.md
+
+markdown_extensions:
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences
+  - pymdownx.inlinehilite
+  - admonition
+  - pymdownx.details

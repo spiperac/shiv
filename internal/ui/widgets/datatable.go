@@ -56,9 +56,11 @@ type DataTable struct {
 	OnSelect     func(row int)
 	MenuItems    func(row int) []ContextMenuItem // nil → no context menu
 	OnNearBottom func()                          // fired when scrolled near the last row
+	RowBgColor   func(row int) color.Color       // nil → default background; non-nil overrides row background
 
 	colWidths    []float32
 	selectedID   int64
+	selectedRow  int // last-selected row index; used for keyboard navigation
 	hasSelected  bool
 	scrollOffset int
 	scrollFrac   float32 // sub-row accumulator for smooth trackpad scrolling
@@ -260,10 +262,48 @@ func (t *DataTable) tappedRow(row int) {
 		t.selectedID = t.RowID(row)
 		t.hasSelected = true
 	}
+	t.selectedRow = row
 	t.Refresh()
 	if t.OnSelect != nil {
 		t.OnSelect(row)
 	}
+	if t.win != nil {
+		t.win.Canvas().Focus(t)
+	}
+}
+
+// FocusGained, FocusLost, TypedRune, TypedKey implement fyne.Focusable.
+func (t *DataTable) FocusGained() { t.Refresh() }
+func (t *DataTable) FocusLost()   { t.Refresh() }
+func (t *DataTable) TypedRune(_ rune) {}
+func (t *DataTable) TypedKey(ev *fyne.KeyEvent) {
+	if !t.hasSelected || t.RowCount == nil {
+		return
+	}
+	total := t.RowCount()
+	if total == 0 {
+		return
+	}
+	next := t.selectedRow
+	switch ev.Name {
+	case fyne.KeyUp:
+		next--
+	case fyne.KeyDown:
+		next++
+	default:
+		return
+	}
+	if next < 0 {
+		next = 0
+	}
+	if next >= total {
+		next = total - 1
+	}
+	if next == t.selectedRow {
+		return
+	}
+	t.ScrollToRow(next)
+	t.tappedRow(next)
 }
 
 func (t *DataTable) secondaryTappedRow(row int, absPos fyne.Position) {
@@ -474,7 +514,15 @@ func (r *dtRenderer) layoutBody() {
 		case r.table.hasSelected && r.table.RowID != nil && r.table.RowID(dataIdx) == r.table.selectedID:
 			rowBg.FillColor = theme.Color(theme.ColorNameSelection)
 		default:
-			rowBg.FillColor = theme.Color(theme.ColorNameBackground)
+			if r.table.RowBgColor != nil {
+				if c := r.table.RowBgColor(dataIdx); c != nil {
+					rowBg.FillColor = c
+				} else {
+					rowBg.FillColor = theme.Color(theme.ColorNameBackground)
+				}
+			} else {
+				rowBg.FillColor = theme.Color(theme.ColorNameBackground)
+			}
 		}
 		rowBg.Refresh()
 		rowBg.Show()

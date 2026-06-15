@@ -3,21 +3,11 @@ package proxy
 import (
 	"fmt"
 	"net/http"
-	"time"
 
 	internalhttp "github.com/shiv/internal/http"
 )
 
-var upstreamClient = &http.Client{
-	Transport: &http.Transport{
-		ResponseHeaderTimeout: 30 * time.Second,
-	},
-	CheckRedirect: func(req *http.Request, via []*http.Request) error {
-		return http.ErrUseLastResponse
-	},
-}
-
-func forward(req *http.Request) (*http.Response, error) {
+func forward(req *http.Request, client *http.Client) (*http.Response, error) {
 	out, err := http.NewRequestWithContext(req.Context(), req.Method, req.URL.String(), req.Body)
 	if err != nil {
 		return nil, fmt.Errorf("forward: build request: %w", err)
@@ -30,7 +20,7 @@ func forward(req *http.Request) (*http.Response, error) {
 	}
 	internalhttp.StripRequestCacheHeaders(out.Header)
 
-	resp, err := upstreamClient.Do(out)
+	resp, err := client.Do(out)
 	if err != nil {
 		return nil, fmt.Errorf("forward: upstream request: %w", err)
 	}

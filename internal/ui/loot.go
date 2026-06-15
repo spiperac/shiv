@@ -188,7 +188,7 @@ func (l *lootTab) build() fyne.CanvasObject {
 
 	split := container.NewVSplit(
 		container.NewBorder(container.NewHBox(addBtn, l.deleteBtn, l.viewReqBtn, l.exportBtn), nil, nil, nil, tableObj),
-		container.NewBorder(newBoldLabel("Notes"), nil, nil, nil, l.notesArea.Build()),
+		container.NewBorder(paneHeader("Notes"), nil, nil, nil, l.notesArea.Build()),
 	)
 	split.SetOffset(0.6)
 
@@ -252,6 +252,7 @@ func (l *lootTab) showAddDialog(historyID *uint64, rawRequest string, rawRespons
 				RawResponse: rawResponse,
 			}); err != nil {
 				logger.Error("loot: add: %v", err)
+				dialog.ShowError(err, l.win)
 				return
 			}
 		}, l.win)
@@ -366,8 +367,8 @@ func (l *lootTab) showRequestResponseDialog(title, rawRequest, rawResponse, host
 	sendBtn := widget.NewButtonWithIcon("Send to Repeater", theme.MailForwardIcon(), nil)
 
 	split := container.NewHSplit(
-		container.NewBorder(newBoldLabel("Request"), nil, nil, nil, reqEntry.Build()),
-		container.NewBorder(newBoldLabel("Response"), nil, nil, nil, respEntry.Build()),
+		container.NewBorder(paneHeader("Request"), nil, nil, nil, reqEntry.Build()),
+		container.NewBorder(paneHeader("Response"), nil, nil, nil, respEntry.Build()),
 	)
 	split.SetOffset(0.5)
 

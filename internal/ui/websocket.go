@@ -29,76 +29,57 @@ func showWebSocketWindow(fyneApp fyne.App, projectStore *store.Store, parentWin 
 	wsWin.Show()
 }
 
-func buildWebSocketContent(projectStore *store.Store, win fyne.Window, repeater *repeaterTab) fyne.CanvasObject {
-
-	// ── state ─────────────────────────────────────────────────────────────────
-
-	var allConns []store.WebSocketConnection
-	var filteredConns []store.WebSocketConnection
-	var allFrames []store.WebSocketFrame
-	var filteredFrames []store.WebSocketFrame
-	var selectedConnID uint64
-
-	// ── filter functions — always return fresh slices, never alias ────────────
-
-	connFilterEntry := widget.NewEntry()
-	connFilterEntry.SetPlaceHolder("Filter — host, url...")
-
-	frameFilterEntry := widget.NewEntry()
-	frameFilterEntry.SetPlaceHolder("Filter frames — payload, type...")
-
-	filterConn := func(query string) []store.WebSocketConnection {
-		q := strings.ToLower(strings.TrimSpace(query))
-		if q == "" {
-			out := make([]store.WebSocketConnection, len(allConns))
-			copy(out, allConns)
-			return out
-		}
-		terms := strings.Fields(q)
-		var out []store.WebSocketConnection
-		for _, c := range allConns {
-			s := strings.ToLower(c.Host + " " + c.URL)
-			ok := true
-			for _, t := range terms {
-				if !strings.Contains(s, t) {
-					ok = false
-					break
-				}
-			}
-			if ok {
-				out = append(out, c)
-			}
-		}
+func filterConnections(all []store.WebSocketConnection, query string) []store.WebSocketConnection {
+	q := strings.ToLower(strings.TrimSpace(query))
+	if q == "" {
+		out := make([]store.WebSocketConnection, len(all))
+		copy(out, all)
 		return out
 	}
+	terms := strings.Fields(q)
+	var out []store.WebSocketConnection
+	for _, c := range all {
+		s := strings.ToLower(c.Host + " " + c.URL)
+		ok := true
+		for _, t := range terms {
+			if !strings.Contains(s, t) {
+				ok = false
+				break
+			}
+		}
+		if ok {
+			out = append(out, c)
+		}
+	}
+	return out
+}
 
-	filterFrame := func(query string) []store.WebSocketFrame {
-		q := strings.ToLower(strings.TrimSpace(query))
-		if q == "" {
-			out := make([]store.WebSocketFrame, len(allFrames))
-			copy(out, allFrames)
-			return out
-		}
-		terms := strings.Fields(q)
-		var out []store.WebSocketFrame
-		for _, f := range allFrames {
-			s := strings.ToLower(string(f.Payload) + " " + opcodeLabel(f.Opcode))
-			ok := true
-			for _, t := range terms {
-				if !strings.Contains(s, t) {
-					ok = false
-					break
-				}
-			}
-			if ok {
-				out = append(out, f)
-			}
-		}
+func filterFrames(all []store.WebSocketFrame, query string) []store.WebSocketFrame {
+	q := strings.ToLower(strings.TrimSpace(query))
+	if q == "" {
+		out := make([]store.WebSocketFrame, len(all))
+		copy(out, all)
 		return out
 	}
+	terms := strings.Fields(q)
+	var out []store.WebSocketFrame
+	for _, f := range all {
+		s := strings.ToLower(string(f.Payload) + " " + opcodeLabel(f.Opcode))
+		ok := true
+		for _, t := range terms {
+			if !strings.Contains(s, t) {
+				ok = false
+				break
+			}
+		}
+		if ok {
+			out = append(out, f)
+		}
+	}
+	return out
+}
 
-	// ── connections table ─────────────────────────────────────────────────────
-
+func buildConnTable(win fyne.Window, filteredConns *[]store.WebSocketConnection) (*widgets.DataTable, fyne.CanvasObject) {
 	connColumns := []widgets.DataTableColumn{
 		{Header: "ID", Width: 50},
 		{Header: "Host", Width: 220},
@@ -107,22 +88,21 @@ func buildWebSocketContent(projectStore *store.Store, win fyne.Window, repeater 
 		{Header: "Frames", Width: 70},
 		{Header: "Time", Width: 180},
 	}
-
 	connTable := widgets.NewDataTable()
 	connTable.SetWindow(win)
 	connTable.Columns = connColumns
-	connTable.RowCount = func() int { return len(filteredConns) }
+	connTable.RowCount = func() int { return len(*filteredConns) }
 	connTable.RowID = func(row int) int64 {
-		if row >= len(filteredConns) {
+		if row >= len(*filteredConns) {
 			return 0
 		}
-		return int64(filteredConns[row].ID)
+		return int64((*filteredConns)[row].ID)
 	}
 	connTable.CellValue = func(row, col int) string {
-		if row >= len(filteredConns) {
+		if row >= len(*filteredConns) {
 			return ""
 		}
-		c := filteredConns[row]
+		c := (*filteredConns)[row]
 		switch col {
 		case 0:
 			return fmt.Sprintf("%d", c.ID)
@@ -142,31 +122,31 @@ func buildWebSocketContent(projectStore *store.Store, win fyne.Window, repeater 
 		}
 		return ""
 	}
+	return connTable, connTable.Build()
+}
 
-	// ── frames table ─────────────────────────────────────────────────────────
-
+func buildFrameTable(win fyne.Window, filteredFrames *[]store.WebSocketFrame) (*widgets.DataTable, fyne.CanvasObject) {
 	frameColumns := []widgets.DataTableColumn{
 		{Header: "Dir", Width: 90},
 		{Header: "Type", Width: 70},
 		{Header: "Length", Width: 80},
 		{Header: "Time", Width: 150},
 	}
-
 	frameTable := widgets.NewDataTable()
 	frameTable.SetWindow(win)
 	frameTable.Columns = frameColumns
-	frameTable.RowCount = func() int { return len(filteredFrames) }
+	frameTable.RowCount = func() int { return len(*filteredFrames) }
 	frameTable.RowID = func(row int) int64 {
-		if row >= len(filteredFrames) {
+		if row >= len(*filteredFrames) {
 			return 0
 		}
-		return int64(filteredFrames[row].ID)
+		return int64((*filteredFrames)[row].ID)
 	}
 	frameTable.CellValue = func(row, col int) string {
-		if row >= len(filteredFrames) {
+		if row >= len(*filteredFrames) {
 			return ""
 		}
-		f := filteredFrames[row]
+		f := (*filteredFrames)[row]
 		switch col {
 		case 0:
 			if f.Direction == events.WebSocketClient {
@@ -183,26 +163,27 @@ func buildWebSocketContent(projectStore *store.Store, win fyne.Window, repeater 
 		return ""
 	}
 	frameTable.CellStyle = func(row, col int) widget.Importance {
-		if col != 0 || row >= len(filteredFrames) {
+		if col != 0 || row >= len(*filteredFrames) {
 			return widget.MediumImportance
 		}
-		if filteredFrames[row].Direction == events.WebSocketClient {
+		if (*filteredFrames)[row].Direction == events.WebSocketClient {
 			return widget.HighImportance
 		}
 		return widget.SuccessImportance
 	}
+	return frameTable, frameTable.Build()
+}
 
-	// ── payload view ──────────────────────────────────────────────────────────
-
+func buildFrameDetail(win fyne.Window, filteredFrames *[]store.WebSocketFrame, frameTable *widgets.DataTable) (*widgets.TextView, fyne.CanvasObject) {
 	payloadView := widgets.NewTextView()
 	payloadView.SetWindow(win)
 	payloadView.SetPlaceHolder("Select a frame to view payload...")
 
 	frameTable.OnSelect = func(row int) {
-		if row >= len(filteredFrames) {
+		if row >= len(*filteredFrames) {
 			return
 		}
-		payload := filteredFrames[row].Payload
+		payload := (*filteredFrames)[row].Payload
 		if len(payload) == 0 {
 			payloadView.SetText("(empty)")
 		} else {
@@ -210,7 +191,32 @@ func buildWebSocketContent(projectStore *store.Store, win fyne.Window, repeater 
 		}
 	}
 
-	// ── load frames on connection select ──────────────────────────────────────
+	payloadPane := container.NewBorder(
+		newBoldLabel("Payload"),
+		nil, nil, nil,
+		payloadView.Build(),
+	)
+	return payloadView, payloadPane
+}
+
+func buildWebSocketContent(projectStore *store.Store, win fyne.Window, repeater *repeaterTab) fyne.CanvasObject {
+	var allConns []store.WebSocketConnection
+	var filteredConns []store.WebSocketConnection
+	var allFrames []store.WebSocketFrame
+	var filteredFrames []store.WebSocketFrame
+	var selectedConnID uint64
+
+	connFilterEntry := widget.NewEntry()
+	connFilterEntry.SetPlaceHolder("Filter — host, url...")
+	frameFilterEntry := widget.NewEntry()
+	frameFilterEntry.SetPlaceHolder("Filter frames — payload, type...")
+
+	refilterConns := func() { filteredConns = filterConnections(allConns, connFilterEntry.Text) }
+	refilterFrames := func() { filteredFrames = filterFrames(allFrames, frameFilterEntry.Text) }
+
+	connTable, connTableObj := buildConnTable(win, &filteredConns)
+	frameTable, frameTableObj := buildFrameTable(win, &filteredFrames)
+	payloadView, payloadPane := buildFrameDetail(win, &filteredFrames, frameTable)
 
 	loadFrames := func(connID uint64) {
 		go func() {
@@ -221,7 +227,7 @@ func buildWebSocketContent(projectStore *store.Store, win fyne.Window, repeater 
 			}
 			fyne.Do(func() {
 				allFrames = loaded
-				filteredFrames = filterFrame(frameFilterEntry.Text)
+				refilterFrames()
 				frameTable.Refresh()
 				payloadView.SetText("")
 			})
@@ -242,37 +248,25 @@ func buildWebSocketContent(projectStore *store.Store, win fyne.Window, repeater 
 		}
 		c := filteredConns[row]
 		return []widgets.ContextMenuItem{
-			{
-				Label: "Send to Repeater",
-				Action: func() {
-					if repeater != nil {
-						name := c.Host
-						repeater.AddWSTab(name, c.URL, c.TLS)
-					}
-				},
-			},
-			{
-				Label: "Copy URL",
-				Action: func() {
-					fyne.CurrentApp().Clipboard().SetContent(c.URL)
-				},
-			},
+			{Label: "Send to Repeater", Action: func() {
+				if repeater != nil {
+					repeater.AddWSTab(c.Host, c.URL, c.TLS)
+				}
+			}},
+			{Label: "Copy URL", Action: func() {
+				fyne.CurrentApp().Clipboard().SetContent(c.URL)
+			}},
 		}
 	}
 
-	// ── filter wiring ─────────────────────────────────────────────────────────
-
 	connFilterEntry.OnChanged = func(q string) {
-		filteredConns = filterConn(q)
+		filteredConns = filterConnections(allConns, q)
 		connTable.Refresh()
 	}
-
 	frameFilterEntry.OnChanged = func(q string) {
-		filteredFrames = filterFrame(q)
+		filteredFrames = filterFrames(allFrames, q)
 		frameTable.Refresh()
 	}
-
-	// ── live streaming updates ────────────────────────────────────────────────
 
 	go func() {
 		for conn := range projectStore.WebSocketConnections {
@@ -284,7 +278,7 @@ func buildWebSocketContent(projectStore *store.Store, win fyne.Window, repeater 
 					}
 				}
 				allConns = append([]store.WebSocketConnection{c}, allConns...)
-				filteredConns = filterConn(connFilterEntry.Text)
+				refilterConns()
 				connTable.Refresh()
 			})
 		}
@@ -300,9 +294,8 @@ func buildWebSocketContent(projectStore *store.Store, win fyne.Window, repeater 
 						break
 					}
 				}
-				filteredConns = filterConn(connFilterEntry.Text)
+				refilterConns()
 				connTable.Refresh()
-
 				if f.ConnectionID != selectedConnID {
 					return
 				}
@@ -314,15 +307,13 @@ func buildWebSocketContent(projectStore *store.Store, win fyne.Window, repeater 
 					}
 					fyne.Do(func() {
 						allFrames = loaded
-						filteredFrames = filterFrame(frameFilterEntry.Text)
+						refilterFrames()
 						frameTable.Refresh()
 					})
 				}()
 			})
 		}
 	}()
-
-	// ── refresh button (manual reload) ────────────────────────────────────────
 
 	refreshBtn := widget.NewButtonWithIcon("Refresh", AppIcon("history"), func() {
 		go func() {
@@ -333,7 +324,7 @@ func buildWebSocketContent(projectStore *store.Store, win fyne.Window, repeater 
 			}
 			fyne.Do(func() {
 				allConns = loaded
-				filteredConns = filterConn(connFilterEntry.Text)
+				refilterConns()
 				connTable.Refresh()
 				if selectedConnID > 0 {
 					loadFrames(selectedConnID)
@@ -341,8 +332,6 @@ func buildWebSocketContent(projectStore *store.Store, win fyne.Window, repeater 
 			})
 		}()
 	})
-
-	// ── initial load ──────────────────────────────────────────────────────────
 
 	go func() {
 		loaded, err := projectStore.AllWebSocketConnections()
@@ -352,39 +341,24 @@ func buildWebSocketContent(projectStore *store.Store, win fyne.Window, repeater 
 		}
 		fyne.Do(func() {
 			allConns = loaded
-			filteredConns = filterConn("")
+			filteredConns = filterConnections(allConns, "")
 			connTable.Refresh()
 		})
 	}()
 
-	// ── layout ────────────────────────────────────────────────────────────────
-
 	connFilterBar := container.NewBorder(nil, nil, nil, refreshBtn, connFilterEntry)
+	frameFilterBar := container.NewBorder(nil, nil, newBoldLabel("Frames"), nil, frameFilterEntry)
+
 	connPane := container.NewBorder(
 		container.NewVBox(newBoldLabel("Connections"), connFilterBar),
-		nil, nil, nil,
-		connTable.Build(),
+		nil, nil, nil, connTableObj,
 	)
-
-	frameFilterBar := container.NewBorder(nil, nil, newBoldLabel("Frames"), nil, frameFilterEntry)
-	framePane := container.NewBorder(
-		frameFilterBar,
-		nil, nil, nil,
-		frameTable.Build(),
-	)
-
-	payloadPane := container.NewBorder(
-		newBoldLabel("Payload"),
-		nil, nil, nil,
-		payloadView.Build(),
-	)
+	framePane := container.NewBorder(frameFilterBar, nil, nil, nil, frameTableObj)
 
 	bottomSplit := container.NewHSplit(framePane, payloadPane)
 	bottomSplit.SetOffset(0.4)
-
 	mainSplit := container.NewVSplit(connPane, bottomSplit)
 	mainSplit.SetOffset(0.4)
-
 	return mainSplit
 }
 

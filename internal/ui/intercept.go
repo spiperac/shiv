@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
+	"io"
 	"net/http"
 
 	"fyne.io/fyne/v2"
@@ -76,10 +77,27 @@ func (t *interceptTab) build() fyne.CanvasObject {
 	t.drop.Disable()
 	t.forwardAll.Disable()
 
+	scopeOnly := widget.NewCheck("Scope only", func(on bool) {
+		if on {
+			t.projectStore.Intercept.SetScopeFilter(t.projectStore.InScope)
+		} else {
+			t.projectStore.Intercept.SetScopeFilter(nil)
+		}
+	})
+
+	copyBtn := widget.NewButton("Copy", func() {
+		fyne.CurrentApp().Clipboard().SetContent(t.editor.Text)
+	})
+
 	buttons := container.NewHBox(t.forward, t.drop, t.forwardAll)
 
 	content := container.NewBorder(
-		container.NewVBox(t.toggle, widget.NewSeparator()),
+		container.NewVBox(
+			container.NewBorder(nil, nil,
+				container.NewHBox(t.toggle, scopeOnly),
+				copyBtn, nil),
+			widget.NewSeparator(),
+		),
 		buttons,
 		nil, nil,
 		t.editor,
@@ -112,7 +130,7 @@ func (t *interceptTab) watchQueue() {
 	}
 }
 
-func FormatRequest(req *http.Request, body []byte) string {
+func formatLiveRequest(req *http.Request, body []byte) string {
 	var builder bytes.Buffer
 	path := req.URL.RequestURI()
 	if path == "" {
@@ -135,7 +153,7 @@ func FormatRequest(req *http.Request, body []byte) string {
 func (t *interceptTab) showRequest(p *store.PendingRequest) {
 	t.pending = p
 	t.editor.Enable()
-	t.editor.SetText(FormatRequest(p.Request, p.Body))
+	t.editor.SetText(formatLiveRequest(p.Request, p.Body))
 	t.forward.Enable()
 	t.drop.Enable()
 	t.forwardAll.Enable()
@@ -185,10 +203,12 @@ func parseRawRequest(raw string, original *http.Request) (*http.Request, []byte,
 
 	var body []byte
 	if req.Body != nil {
-		buf := new(bytes.Buffer)
-		buf.ReadFrom(req.Body)
+		var err error
+		body, err = io.ReadAll(req.Body)
 		req.Body.Close()
-		body = buf.Bytes()
+		if err != nil {
+			return nil, nil, fmt.Errorf("read request body: %w", err)
+		}
 	}
 	req.Body = http.NoBody
 

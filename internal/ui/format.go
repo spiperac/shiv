@@ -39,9 +39,9 @@ func PrettyJSON(body []byte) []byte {
 
 // hostHeader returns the value to use for the Host header in a reconstructed
 // raw request. Default ports (80 for HTTP, 443 for HTTPS) are omitted per
-// RFC 7230. Non-standard ports are always included.
+// RFC 7230 §5.4. Non-standard ports are always included.
 func hostHeader(tx store.Transaction) string {
-	if tx.Port == 0 {
+	if tx.Port == 0 || (tx.TLS && tx.Port == 443) || (!tx.TLS && tx.Port == 80) {
 		return tx.Host
 	}
 	return tx.Host + ":" + strconv.Itoa(tx.Port)

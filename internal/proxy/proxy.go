@@ -20,6 +20,7 @@ type Proxy struct {
 	addr     string
 	certAuth *cert.CA
 	bus      *events.Bus
+	client   *http.Client
 
 	mu    sync.Mutex
 	srv   *http.Server
@@ -33,7 +34,19 @@ func New(addr string, bus *events.Bus) (*Proxy, error) {
 	if err != nil {
 		return nil, fmt.Errorf("proxy: load CA: %w", err)
 	}
-	p := &Proxy{addr: addr, certAuth: ca, bus: bus}
+	p := &Proxy{
+		addr:     addr,
+		certAuth: ca,
+		bus:      bus,
+		client: &http.Client{
+			Transport: &http.Transport{
+				ResponseHeaderTimeout: 30 * time.Second,
+			},
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		},
+	}
 	bus.Register(p)
 	return p, nil
 }
@@ -143,7 +156,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	start := time.Now()
 
-	resp, err := forward(interceptedReq)
+	resp, err := forward(interceptedReq, p.client)
 	if err != nil {
 		http.Error(w, "bad gateway", http.StatusBadGateway)
 		return

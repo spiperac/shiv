@@ -7,6 +7,7 @@
 *.dll
 *.so
 *.dylib
+*.AppImage
 
 # Profiler files
 heap.prof
@@ -15,6 +16,7 @@ heap.prof
 shiv
 *.shiv
 *.tar.xz
+fyne-cross/*
 
 # Test binary, built with `go test -c`
 *.test

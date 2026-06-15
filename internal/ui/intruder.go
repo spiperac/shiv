@@ -1,9 +1,12 @@
 package ui
 
 import (
+	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -25,6 +28,21 @@ import (
 )
 
 var intruderMarkerRegex = regexp.MustCompile(`\$<[^>]+>`)
+
+func applyPayloadEncoding(payload, encoding string) string {
+	switch encoding {
+	case "URL encode":
+		return url.QueryEscape(payload)
+	case "Double URL encode":
+		return url.QueryEscape(url.QueryEscape(payload))
+	case "Base64":
+		return base64.StdEncoding.EncodeToString([]byte(payload))
+	case "Hex":
+		return hex.EncodeToString([]byte(payload))
+	default:
+		return payload
+	}
+}
 
 type intruderResult struct {
 	payload    string
@@ -53,6 +71,10 @@ type intruderTab struct {
 
 	sendToRepeaterBtn *widget.Button
 	sendToLootBtn     *widget.Button
+	viewFullBtn       *widget.Button
+	loadPayloadsBtn   *widget.Button
+
+	payloadEncoding string // "none", "url", "double-url", "base64", "hex"
 
 	selectedResult *intruderResult
 
@@ -107,15 +129,26 @@ func (t *intruderTab) showConfigDialog() {
 	timeoutEntry.SetText(strconv.Itoa(t.config.TimeoutMs))
 	timeoutEntry.SetPlaceHolder("30000")
 
+	encodingSelect := widget.NewSelect(
+		[]string{"None", "URL encode", "Double URL encode", "Base64", "Hex"},
+		nil,
+	)
+	enc := t.payloadEncoding
+	if enc == "" {
+		enc = "None"
+	}
+	encodingSelect.SetSelected(enc)
+
 	form := widget.NewForm(
 		widget.NewFormItem("Delay between requests (ms)", delayEntry),
 		widget.NewFormItem("Stop on status code", stopOnStatusEntry),
 		widget.NewFormItem("Follow redirects", followRedirectsSelect),
 		widget.NewFormItem("Max redirects", maxRedirectsEntry),
 		widget.NewFormItem("Timeout (ms)", timeoutEntry),
+		widget.NewFormItem("Payload encoding", encodingSelect),
 	)
 
-	sized := container.NewGridWrap(fyne.NewSize(420, 280), form)
+	sized := container.NewGridWrap(fyne.NewSize(420, 310), form)
 	configDialog := dialog.NewCustomConfirm("Attack Configuration", "Save", "Cancel", sized, func(confirmed bool) {
 		if !confirmed {
 			return
@@ -135,6 +168,7 @@ func (t *intruderTab) showConfigDialog() {
 		if timeout, err := strconv.Atoi(strings.TrimSpace(timeoutEntry.Text)); err == nil && timeout > 0 {
 			t.config.TimeoutMs = timeout
 		}
+		t.payloadEncoding = encodingSelect.Selected
 		t.config.RawRequest = t.reqEditor.GetText()
 		t.config.Payloads = t.payloadEntry.Text
 		t.projectStore.SaveIntruderConfig(t.config)
@@ -144,7 +178,7 @@ func (t *intruderTab) showConfigDialog() {
 	configDialog.Show()
 }
 
-func (t *intruderTab) build() fyne.CanvasObject {
+func (t *intruderTab) buildRequestPane() fyne.CanvasObject {
 	t.reqEditor = widgets.NewTextViewEntry()
 	t.reqEditor.SetWindow(t.win)
 	t.reqEditor.SetPlaceHolder("Paste raw HTTP request here, mark injection points with $<n>\n\nExample:\nGET /search?q=$<query> HTTP/1.1\nHost: example.com")
@@ -155,7 +189,7 @@ func (t *intruderTab) build() fyne.CanvasObject {
 	t.payloadEntry.SetMinRowsVisible(8)
 	t.payloadEntry.SetText(t.config.Payloads)
 
-	loadPayloadsBtn := widget.NewButtonWithIcon("Load from file", theme.FolderOpenIcon(), func() {
+	t.loadPayloadsBtn = widget.NewButtonWithIcon("Load from file", theme.FolderOpenIcon(), func() {
 		fileDialog := dialog.NewFileOpen(func(readCloser fyne.URIReadCloser, err error) {
 			if err != nil || readCloser == nil {
 				return
@@ -171,69 +205,97 @@ func (t *intruderTab) build() fyne.CanvasObject {
 		fileDialog.Show()
 	})
 
+	payloadPane := container.NewBorder(
+		paneHeader("Payloads"),
+		nil, nil, nil,
+		t.payloadEntry,
+	)
+
+	configSplit := container.NewHSplit(
+		container.NewBorder(paneHeader("Request"), nil, nil, nil, t.reqEditor.Build()),
+		payloadPane,
+	)
+	configSplit.SetOffset(0.6)
+	return configSplit
+}
+
+func (t *intruderTab) tableCellValue(row, col int) string {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	if row >= len(t.filtered) {
+		return ""
+	}
+	result := t.filtered[row]
+	switch col {
+	case 0:
+		return result.payload
+	case 1:
+		if result.err != "" {
+			return "ERR"
+		}
+		return fmt.Sprintf("%d", result.statusCode)
+	case 2:
+		if result.err != "" {
+			return "-"
+		}
+		return fmt.Sprintf("%db", result.size)
+	case 3:
+		if result.err != "" {
+			return "-"
+		}
+		return fmt.Sprintf("%dms", result.durationMs)
+	}
+	return ""
+}
+
+func (t *intruderTab) tableCellStyle(row, col int) widget.Importance {
+	if col != 1 {
+		return widget.MediumImportance
+	}
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	if row >= len(t.filtered) {
+		return widget.MediumImportance
+	}
+	result := t.filtered[row]
+	if result.err != "" {
+		return widget.DangerImportance
+	}
+	switch {
+	case result.statusCode >= 500:
+		return widget.DangerImportance
+	case result.statusCode >= 400:
+		return widget.WarningImportance
+	case result.statusCode >= 200 && result.statusCode < 300:
+		return widget.SuccessImportance
+	}
+	return widget.MediumImportance
+}
+
+func (t *intruderTab) tableOnSelect(row int) {
+	t.mu.RLock()
+	if row >= len(t.filtered) {
+		t.mu.RUnlock()
+		return
+	}
+	result := t.filtered[row]
+	t.mu.RUnlock()
+	t.selectedResult = &result
+	t.responsePane.SetText(result.rawResp)
+	t.requestPane.SetText(result.rawReq)
+	t.sendToRepeaterBtn.Enable()
+	t.sendToLootBtn.Enable()
+	if len(result.rawResp) > internalhttp.MaxDisplayBytes {
+		t.viewFullBtn.Show()
+	} else {
+		t.viewFullBtn.Hide()
+	}
+}
+
+func (t *intruderTab) buildResultsTable() fyne.CanvasObject {
 	t.filterEntry = widget.NewEntry()
 	t.filterEntry.SetPlaceHolder("Filter results — payload, status...")
 	t.filterEntry.OnChanged = func(_ string) { t.applyFilter() }
-
-	t.progressLabel = widget.NewLabel("")
-	t.progressLabel.Importance = widget.LowImportance
-
-	t.startBtn = widget.NewButtonWithIcon("Start Attack", theme.MediaPlayIcon(), func() {
-		t.startAttack()
-	})
-	t.startBtn.Importance = widget.HighImportance
-
-	t.stopBtn = widget.NewButtonWithIcon("Stop", theme.MediaStopIcon(), func() {
-		t.stopAttack()
-	})
-	t.stopBtn.Disable()
-
-	configBtn := widget.NewButtonWithIcon("Config", AppIcon("settings"), func() {
-		t.showConfigDialog()
-	})
-
-	clearBtn := widget.NewButtonWithIcon("Clear Results", AppIcon("delete"), func() {
-		t.mu.Lock()
-		t.results = nil
-		t.filtered = nil
-		t.mu.Unlock()
-		t.table.Refresh()
-		t.progressLabel.SetText("")
-		t.responsePane.SetText("")
-		t.requestPane.SetText("")
-		t.selectedResult = nil
-		t.sendToRepeaterBtn.Disable()
-		t.sendToLootBtn.Disable()
-	})
-
-	t.sendToRepeaterBtn = widget.NewButtonWithIcon("Repeater", theme.MailForwardIcon(), func() {
-		if t.selectedResult == nil {
-			return
-		}
-		host, port, useTLS := internalhttp.ParseHostFromRaw(t.selectedResult.rawReq)
-		path := PathOf(internalhttp.ExtractURL(t.selectedResult.rawReq))
-		if len(path) > 20 {
-			path = path[:20] + "..."
-		}
-		t.repeater.AddTab(fmt.Sprintf("Intruder %s", path), host, port, useTLS, t.selectedResult.rawReq)
-	})
-	t.sendToRepeaterBtn.Disable()
-
-	t.sendToLootBtn = widget.NewButtonWithIcon("Loot", AppIcon("loot"), func() {
-		if t.selectedResult == nil {
-			return
-		}
-		t.loot.showAddDialog(nil, t.selectedResult.rawReq, t.selectedResult.rawResp)
-	})
-	t.sendToLootBtn.Disable()
-
-	t.responsePane = widgets.NewTextView()
-	t.responsePane.SetWindow(t.win)
-	t.responsePane.SetPlaceHolder("Select a result to view response...")
-
-	t.requestPane = widgets.NewTextView()
-	t.requestPane.SetWindow(t.win)
-	t.requestPane.SetPlaceHolder("Select a result to view request...")
 
 	t.table = widgets.NewDataTable()
 	t.table.SetWindow(t.win)
@@ -243,75 +305,10 @@ func (t *intruderTab) build() fyne.CanvasObject {
 		defer t.mu.RUnlock()
 		return len(t.filtered)
 	}
-	t.table.CellValue = func(row, col int) string {
-		t.mu.RLock()
-		defer t.mu.RUnlock()
-		if row >= len(t.filtered) {
-			return ""
-		}
-		result := t.filtered[row]
-		switch col {
-		case 0:
-			return result.payload
-		case 1:
-			if result.err != "" {
-				return "ERR"
-			}
-			return fmt.Sprintf("%d", result.statusCode)
-		case 2:
-			if result.err != "" {
-				return "-"
-			}
-			return fmt.Sprintf("%db", result.size)
-		case 3:
-			if result.err != "" {
-				return "-"
-			}
-			return fmt.Sprintf("%dms", result.durationMs)
-		}
-		return ""
-	}
-	t.table.CellStyle = func(row, col int) widget.Importance {
-		if col != 1 {
-			return widget.MediumImportance
-		}
-		t.mu.RLock()
-		defer t.mu.RUnlock()
-		if row >= len(t.filtered) {
-			return widget.MediumImportance
-		}
-		result := t.filtered[row]
-		if result.err != "" {
-			return widget.DangerImportance
-		}
-		switch {
-		case result.statusCode >= 500:
-			return widget.DangerImportance
-		case result.statusCode >= 400:
-			return widget.WarningImportance
-		case result.statusCode >= 200 && result.statusCode < 300:
-			return widget.SuccessImportance
-		}
-		return widget.MediumImportance
-	}
-	t.table.RowID = func(row int) int64 {
-		return int64(row)
-	}
-	t.table.OnSelect = func(row int) {
-		t.mu.RLock()
-		if row >= len(t.filtered) {
-			t.mu.RUnlock()
-			return
-		}
-		result := t.filtered[row]
-		t.mu.RUnlock()
-
-		t.selectedResult = &result
-		t.responsePane.SetText(result.rawResp)
-		t.requestPane.SetText(result.rawReq)
-		t.sendToRepeaterBtn.Enable()
-		t.sendToLootBtn.Enable()
-	}
+	t.table.CellValue = t.tableCellValue
+	t.table.CellStyle = t.tableCellStyle
+	t.table.RowID = func(row int) int64 { return int64(row) }
+	t.table.OnSelect = t.tableOnSelect
 	t.table.MenuItems = func(row int) []widgets.ContextMenuItem {
 		t.mu.RLock()
 		if row >= len(t.filtered) {
@@ -323,37 +320,113 @@ func (t *intruderTab) build() fyne.CanvasObject {
 		return t.contextMenuItems(result)
 	}
 
-	tableObj := t.table.Build()
-
-	detailPane := container.NewHSplit(
-		container.NewBorder(newBoldLabel("Request"), nil, nil, nil, t.requestPane.Build()),
-		container.NewBorder(newBoldLabel("Response"), nil, nil, nil, t.responsePane.Build()),
-	)
-
-	toolbar := container.NewHBox(t.startBtn, t.stopBtn, configBtn, clearBtn, t.progressLabel, layout.NewSpacer(), loadPayloadsBtn)
-
-	payloadPane := container.NewBorder(
-		newBoldLabel("Payloads"),
-		nil, nil, nil,
-		t.payloadEntry,
-	)
-
-	configSplit := container.NewHSplit(
-		container.NewBorder(newBoldLabel("Request"), nil, nil, nil, t.reqEditor.Build()),
-		payloadPane,
-	)
-	configSplit.SetOffset(0.6)
-
-	tablePane := container.NewBorder(
+	return container.NewBorder(
 		container.NewBorder(nil, nil, newBoldLabel("Results"), nil, t.filterEntry),
 		nil, nil, nil,
-		tableObj,
+		t.table.Build(),
 	)
+}
+
+func (t *intruderTab) buildResultDetailPane() fyne.CanvasObject {
+	t.responsePane = widgets.NewTextView()
+	t.responsePane.SetWindow(t.win)
+	t.responsePane.SetPlaceHolder("Select a result to view response...")
+
+	t.requestPane = widgets.NewTextView()
+	t.requestPane.SetWindow(t.win)
+	t.requestPane.SetPlaceHolder("Select a result to view request...")
+
+	copyReqBtn := widget.NewButton("Copy", func() {
+		if t.selectedResult != nil {
+			fyne.CurrentApp().Clipboard().SetContent(t.selectedResult.rawReq)
+		}
+	})
+	copyRespBtn := widget.NewButton("Copy", func() {
+		if t.selectedResult != nil {
+			fyne.CurrentApp().Clipboard().SetContent(t.selectedResult.rawResp)
+		}
+	})
+	t.viewFullBtn = widget.NewButton("View Full", func() {
+		if t.selectedResult != nil {
+			showFullBodyDialog([]byte(t.selectedResult.rawResp), t.win)
+		}
+	})
+	t.viewFullBtn.Hide()
+
+	detailPane := container.NewHSplit(
+		container.NewBorder(
+			paneHeader("Request", copyReqBtn),
+			nil, nil, nil, t.requestPane.Build(),
+		),
+		container.NewBorder(
+			paneHeader("Response", t.viewFullBtn, copyRespBtn),
+			nil, nil, nil, t.responsePane.Build(),
+		),
+	)
+	return detailPane
+}
+
+func (t *intruderTab) clearResults() {
+	t.mu.Lock()
+	t.results = nil
+	t.filtered = nil
+	t.mu.Unlock()
+	t.table.Refresh()
+	t.progressLabel.SetText("")
+	t.responsePane.SetText("")
+	t.requestPane.SetText("")
+	t.selectedResult = nil
+	t.sendToRepeaterBtn.Disable()
+	t.sendToLootBtn.Disable()
+}
+
+func (t *intruderTab) sendSelectedToRepeater() {
+	if t.selectedResult == nil {
+		return
+	}
+	host, port, useTLS := internalhttp.ParseHostFromRaw(t.selectedResult.rawReq)
+	path := PathOf(internalhttp.ExtractURL(t.selectedResult.rawReq))
+	if len(path) > 20 {
+		path = path[:20] + "..."
+	}
+	t.repeater.AddTab(fmt.Sprintf("Intruder %s", path), host, port, useTLS, t.selectedResult.rawReq)
+}
+
+func (t *intruderTab) buildToolbar() fyne.CanvasObject {
+	t.progressLabel = widget.NewLabel("")
+	t.progressLabel.Importance = widget.LowImportance
+
+	t.startBtn = widget.NewButtonWithIcon("Start Attack", theme.MediaPlayIcon(), func() { t.startAttack() })
+	t.startBtn.Importance = widget.HighImportance
+	t.stopBtn = widget.NewButtonWithIcon("Stop", theme.MediaStopIcon(), func() { t.stopAttack() })
+	t.stopBtn.Disable()
+
+	configBtn := widget.NewButtonWithIcon("Config", AppIcon("settings"), func() { t.showConfigDialog() })
+
+	t.sendToRepeaterBtn = widget.NewButtonWithIcon("Repeater", theme.MailForwardIcon(), func() { t.sendSelectedToRepeater() })
+	t.sendToRepeaterBtn.Disable()
+	t.sendToLootBtn = widget.NewButtonWithIcon("Loot", AppIcon("loot"), func() {
+		if t.selectedResult != nil {
+			t.loot.showAddDialog(nil, t.selectedResult.rawReq, t.selectedResult.rawResp)
+		}
+	})
+	t.sendToLootBtn.Disable()
+
+	clearBtn := widget.NewButtonWithIcon("Clear Results", AppIcon("delete"), func() { t.clearResults() })
+
+	return container.NewHBox(t.startBtn, t.stopBtn, configBtn, clearBtn, t.progressLabel, layout.NewSpacer(), t.loadPayloadsBtn)
+}
+
+func (t *intruderTab) build() fyne.CanvasObject {
+	requestPane := t.buildRequestPane()
+	detailPane := t.buildResultDetailPane()
+	tablePane := t.buildResultsTable()
+	toolbar := t.buildToolbar()
 
 	resultsSplit := container.NewHSplit(tablePane, detailPane)
 	resultsSplit.SetOffset(0.4)
 
-	mainSplit := container.NewVSplit(configSplit, resultsSplit)
+	mainSplit := container.NewVSplit(requestPane, resultsSplit)
 	mainSplit.SetOffset(0.45)
 
 	return container.NewBorder(toolbar, nil, nil, nil, mainSplit)
@@ -387,7 +460,17 @@ func (t *intruderTab) followRedirect(rawResp string, originalHost string) (strin
 	case "never":
 		return "", false
 	case "in-scope":
-		if !t.projectStore.InScope(location) {
+		// location may be an absolute URL — extract the hostname before the scope check.
+		scopeHost := location
+		if strings.HasPrefix(location, "http://") || strings.HasPrefix(location, "https://") {
+			rest := location[strings.Index(location, "//")+2:]
+			if slash := strings.Index(rest, "/"); slash >= 0 {
+				scopeHost = rest[:slash]
+			} else {
+				scopeHost = rest
+			}
+		}
+		if !t.projectStore.InScope(scopeHost) {
 			return "", false
 		}
 	}
@@ -432,10 +515,11 @@ func (t *intruderTab) followRedirect(rawResp string, originalHost string) (strin
 
 	redirectReq := fmt.Sprintf("GET %s HTTP/1.1\r\nHost: %s\r\n\r\n", redirectPath, redirectHost)
 	result, err := internalhttp.SendRaw(internalhttp.RawRequestOptions{
-		Host:   redirectHost,
-		Port:   port,
-		TLS:    useTLS,
-		RawReq: redirectReq,
+		Host:      redirectHost,
+		Port:      port,
+		TLS:       useTLS,
+		RawReq:    redirectReq,
+		TimeoutMs: t.config.TimeoutMs,
 	})
 	if err != nil {
 		return "", false
@@ -498,6 +582,7 @@ func (t *intruderTab) startAttack() {
 	t.stopBtn.Enable()
 
 	config := t.config
+	encoding := t.payloadEncoding
 	total := len(cleanPayloads) * len(markers)
 	done := 0
 
@@ -519,7 +604,8 @@ func (t *intruderTab) startAttack() {
 					time.Sleep(time.Duration(config.DelayMs) * time.Millisecond)
 				}
 
-				injected := strings.ReplaceAll(rawReq, marker, payload)
+				encodedPayload := applyPayloadEncoding(payload, encoding)
+				injected := strings.ReplaceAll(rawReq, marker, encodedPayload)
 				host, port, useTLS := internalhttp.ParseHostFromRaw(injected)
 
 				var result intruderResult
@@ -531,10 +617,11 @@ func (t *intruderTab) startAttack() {
 				} else {
 					start := time.Now()
 					resp, err := internalhttp.SendRaw(internalhttp.RawRequestOptions{
-						Host:   host,
-						Port:   port,
-						TLS:    useTLS,
-						RawReq: injected,
+						Host:      host,
+						Port:      port,
+						TLS:       useTLS,
+						RawReq:    injected,
+						TimeoutMs: config.TimeoutMs,
 					})
 					elapsed := time.Since(start).Milliseconds()
 					if err != nil {

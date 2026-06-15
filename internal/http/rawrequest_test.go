@@ -95,14 +95,14 @@ func TestParseRawHeaders_Empty(t *testing.T) {
 // ── normalizeLineEndings ──────────────────────────────────────────────────────
 
 func TestNormalizeLineEndings_LFtoCRLF(t *testing.T) {
-	out := normalizeLineEndings("GET / HTTP/1.1\nHost: example.com\n\n")
+	out := NormalizeLineEndings("GET / HTTP/1.1\nHost: example.com\n\n")
 	assert.Contains(t, out, "\r\n")
 	assert.NotContains(t, out, "\n\n")
 }
 
 func TestNormalizeLineEndings_AlreadyCRLF(t *testing.T) {
 	in := "GET / HTTP/1.1\r\nHost: example.com\r\n\r\n"
-	out := normalizeLineEndings(in)
+	out := NormalizeLineEndings(in)
 	assert.Equal(t, in, out)
 }
 
@@ -111,7 +111,7 @@ func TestNormalizeLineEndings_FoldsContinuation(t *testing.T) {
 	// normalizeLineEndings only touches the header section and converts LF to CRLF.
 	// Continuation lines are preserved as-is.
 	in := "GET / HTTP/1.1\r\nHost: example.com\r\n continued\r\n\r\n"
-	out := normalizeLineEndings(in)
+	out := NormalizeLineEndings(in)
 	assert.Equal(t, in, out)
 }
 

@@ -3,6 +3,7 @@ package plugin
 import (
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -169,6 +170,10 @@ func (e *Engine) ObserveResponse(ev events.ResponseEvent) {
 	// call captures these plain Go values in its builder closure — no live
 	// event fields are accessed inside the lock.
 	host := ev.Host
+	// ev.Host arrives as host:port from the proxy; expose bare hostname to plugins.
+	if h, _, err := net.SplitHostPort(ev.Host); err == nil {
+		host = h
+	}
 	method := ev.Method
 	url := ev.URL
 	proto := ev.Proto

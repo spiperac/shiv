@@ -17,26 +17,36 @@ import (
 func showInspectorDialog(tx store.Transaction, win fyne.Window) {
 	tabs := container.NewAppTabs()
 
-	tabs.Append(container.NewTabItem("Headers", buildHeadersList(tx.RespHeaders)))
+	if len(tx.ReqHeaders) > 0 {
+		tabs.Append(container.NewTabItem("Req Headers", buildHeadersList(tx.ReqHeaders)))
+	}
+	if len(tx.ReqBody) > 0 {
+		body := widgets.NewTextView()
+		body.SetWindow(win)
+		body.SetText(string(PrettyJSON(tx.ReqBody)))
+		tabs.Append(container.NewTabItem("Req Body", body.Build()))
+	}
+
+	tabs.Append(container.NewTabItem("Resp Headers", buildHeadersList(tx.RespHeaders)))
 
 	cookies := parseCookies(tx.RespHeaders)
 	tabs.Append(container.NewTabItem("Cookies", buildKVTable(cookies)))
 
-	contentType := tx.RespHeaders.Get("Content-Type")
-	if strings.Contains(contentType, "application/json") && len(tx.RespBody) > 0 {
-		body := tx.RespBody
-		if idx := strings.Index(string(body), "\r\n\r\n"); idx >= 0 {
-			body = body[idx+4:]
-		} else if idx := strings.Index(string(body), "\n\n"); idx >= 0 {
-			body = body[idx+2:]
+	if len(tx.RespBody) > 0 {
+		body := widgets.NewTextView()
+		body.SetWindow(win)
+		ct := tx.RespHeaders.Get("Content-Type")
+		if strings.Contains(ct, "application/json") {
+			body.SetText(string(PrettyJSON(tx.RespBody)))
+			tabs.Append(container.NewTabItem("JSON", body.Build()))
+		} else {
+			body.SetText(string(tx.RespBody))
+			tabs.Append(container.NewTabItem("Resp Body", body.Build()))
 		}
-		jsonEntry := widgets.NewTextView()
-		jsonEntry.SetText(string(PrettyJSON(body)))
-		tabs.Append(container.NewTabItem("JSON", jsonEntry.Build()))
 	}
 
 	d := dialog.NewCustom("Inspector", "Close", tabs, win)
-	d.Resize(fyne.NewSize(600, 400))
+	d.Resize(fyne.NewSize(700, 500))
 	closeOnEscape(win, d.Dismiss)
 	d.Show()
 }
@@ -110,6 +120,6 @@ func buildKVTable(pairs [][2]string) fyne.CanvasObject {
 		},
 	)
 	t.SetColumnWidth(0, 200)
-	t.SetColumnWidth(1, 350)
+	t.SetColumnWidth(1, 450)
 	return t
 }

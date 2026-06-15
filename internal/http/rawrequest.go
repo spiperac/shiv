@@ -19,6 +19,7 @@ type RawRequestOptions struct {
 	TLS       bool
 	RawReq    string
 	CookieJar map[string]string // optional; merged into Cookie header
+	TimeoutMs int               // 0 means use defaults (10s dial, 30s total)
 }
 
 // RawResponse is returned by SendRaw.
@@ -39,30 +40,33 @@ type RawResponse struct {
 func SendRaw(opts RawRequestOptions) (*RawResponse, error) {
 	addr := net.JoinHostPort(opts.Host, strconv.Itoa(opts.Port))
 
+	timeout := 30 * time.Second
+	if opts.TimeoutMs > 0 {
+		timeout = time.Duration(opts.TimeoutMs) * time.Millisecond
+	}
+
 	var conn net.Conn
 	var err error
 	if opts.TLS {
-		// Use DialTimeout via net.Dialer so TLS handshake is also bounded.
-		dialer := &net.Dialer{Timeout: 10 * time.Second}
+		dialer := &net.Dialer{Timeout: timeout}
 		tlsCfg := &tls.Config{
 			ServerName:         opts.Host,
 			InsecureSkipVerify: true, //nolint:gosec
 		}
 		conn, err = tls.DialWithDialer(dialer, "tcp", addr, tlsCfg)
 	} else {
-		conn, err = net.DialTimeout("tcp", addr, 10*time.Second)
+		conn, err = net.DialTimeout("tcp", addr, timeout)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("dial %s: %w", addr, err)
 	}
 	defer conn.Close()
 
-	// Deadline covers the full round-trip after the connection is established.
-	if err := conn.SetDeadline(time.Now().Add(30 * time.Second)); err != nil {
+	if err := conn.SetDeadline(time.Now().Add(timeout)); err != nil {
 		return nil, fmt.Errorf("set deadline: %w", err)
 	}
 
-	raw := normalizeLineEndings(opts.RawReq)
+	raw := NormalizeLineEndings(opts.RawReq)
 	raw = rewriteRequestLine(raw)
 	raw = rewriteHeaders(raw, opts.CookieJar)
 
@@ -76,7 +80,10 @@ func SendRaw(opts RawRequestOptions) (*RawResponse, error) {
 	}
 	defer httpResp.Body.Close()
 
-	body, _ := io.ReadAll(io.LimitReader(httpResp.Body, 2<<20))
+	body, err := io.ReadAll(io.LimitReader(httpResp.Body, 2<<20))
+	if err != nil {
+		return nil, fmt.Errorf("read response body: %w", err)
+	}
 	body = Decompress(httpResp.Header, body)
 	body = TruncateBody(body)
 	rawResp := buildRawResponse(httpResp, body)
@@ -185,30 +192,26 @@ func ParseRawHeaders(raw string) http.Header {
 	return headers
 }
 
-// normalizeLineEndings ensures CRLF throughout the header section only.
-// It does NOT touch the body to avoid corrupting binary or multi-byte content.
-func normalizeLineEndings(raw string) string {
-	// Split into header section and body at the first blank line.
-	// We look for both \r\n\r\n and \n\n to handle inputs from different sources.
-	var headerSection, body string
+// SplitRaw splits a raw HTTP message into its header section and body at the
+// first blank line. Handles both CRLF and LF delimiters. The returned header
+// section does not include the blank-line separator.
+func SplitRaw(raw string) (header string, body []byte) {
 	if idx := strings.Index(raw, "\r\n\r\n"); idx >= 0 {
-		headerSection = raw[:idx]
-		body = raw[idx+4:]
-	} else if idx := strings.Index(raw, "\n\n"); idx >= 0 {
-		headerSection = raw[:idx]
-		body = raw[idx+2:]
-	} else {
-		// No blank line found — treat the whole thing as headers.
-		headerSection = raw
-		body = ""
+		return raw[:idx], []byte(raw[idx+4:])
 	}
+	if idx := strings.Index(raw, "\n\n"); idx >= 0 {
+		return raw[:idx], []byte(raw[idx+2:])
+	}
+	return raw, nil
+}
 
-	// Normalize to CRLF in the header section only.
-	// First collapse any existing \r\n to \n, then expand all \n to \r\n.
-	headerSection = strings.ReplaceAll(headerSection, "\r\n", "\n")
-	headerSection = strings.ReplaceAll(headerSection, "\n", "\r\n")
-
-	return headerSection + "\r\n\r\n" + body
+// NormalizeLineEndings ensures CRLF throughout the header section only.
+// It does NOT touch the body to avoid corrupting binary or multi-byte content.
+func NormalizeLineEndings(raw string) string {
+	header, body := SplitRaw(raw)
+	header = strings.ReplaceAll(header, "\r\n", "\n")
+	header = strings.ReplaceAll(header, "\n", "\r\n")
+	return header + "\r\n\r\n" + string(body)
 }
 
 // rewriteHeaders rewrites the header section of a raw request:

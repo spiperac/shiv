@@ -2,8 +2,6 @@ package store
 
 import (
 	"fmt"
-	"net"
-	"strconv"
 	"time"
 
 	"github.com/shiv/internal/events"
@@ -160,41 +158,6 @@ func (s *Store) FramesForConnection(connectionID uint64) ([]WebSocketFrame, erro
 		frames = append(frames, f)
 	}
 	return frames, rows.Err()
-}
-
-// ObserveResponse implements events.ResponseObserver.
-// It splits e.Host (which arrives as host:port from the proxy) into a pure
-// hostname and integer port once here — no downstream consumer ever parses
-// host/port again.
-func (s *Store) ObserveResponse(e events.ResponseEvent) {
-	host, portStr, err := net.SplitHostPort(e.Host)
-	if err != nil {
-		// e.Host had no port — should not happen in practice but handle gracefully.
-		host = e.Host
-		if e.TLS {
-			portStr = "443"
-		} else {
-			portStr = "80"
-		}
-	}
-	port, _ := strconv.Atoi(portStr)
-
-	_ = s.Log(Transaction{
-		Timestamp:   e.Timestamp,
-		Host:        host,
-		Port:        port,
-		Proto:       e.Proto,
-		Method:      e.Method,
-		URL:         e.URL,
-		ReqHeaders:  e.ReqHeaders,
-		ReqBody:     e.ReqBody,
-		StatusCode:  e.StatusCode,
-		RespHeaders: e.RespHeaders,
-		RespBody:    e.RespBody,
-		DurationMs:  e.DurationMs,
-		TLS:         e.TLS,
-		InScope:     s.InScope(host),
-	})
 }
 
 // ObserveWebSocketConnection implements events.WebSocketConnectionObserver.

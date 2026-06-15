@@ -1,6 +1,7 @@
 package store
 
 import (
+	"net"
 	"net/http"
 	"sync"
 
@@ -68,7 +69,10 @@ type InterceptGate struct {
 
 	bypassMu     sync.Mutex
 	bypass       chan struct{} // closed to release all waiting goroutines
-	bypassClosed bool          // tracks whether current bypass is already closed
+	bypassClosed bool         // tracks whether current bypass is already closed
+
+	scopeMu      sync.RWMutex
+	scopeCheckFn func(host string) bool // nil = intercept all; non-nil = intercept only if returns true
 }
 
 // NewInterceptGate creates a new gate. Intercept is off by default.
@@ -112,6 +116,15 @@ func (g *InterceptGate) SetEnabled(v bool) {
 	}
 }
 
+// SetScopeFilter sets a predicate that gates which requests enter the queue.
+// Pass nil to intercept all requests. Pass a function returning true for
+// in-scope hosts to intercept scope-only traffic.
+func (g *InterceptGate) SetScopeFilter(fn func(host string) bool) {
+	g.scopeMu.Lock()
+	g.scopeCheckFn = fn
+	g.scopeMu.Unlock()
+}
+
 // Hold blocks until the user makes a decision on this request.
 // If intercept is off, returns immediately.
 // Requests acquire the semaphore in arrival order so the UI sees exactly
@@ -121,6 +134,19 @@ func (g *InterceptGate) SetEnabled(v bool) {
 func (g *InterceptGate) Hold(req *http.Request, body []byte) (*http.Request, []byte, bool) {
 	if !g.Enabled() {
 		return req, body, true
+	}
+
+	g.scopeMu.RLock()
+	fn := g.scopeCheckFn
+	g.scopeMu.RUnlock()
+	if fn != nil {
+		host := req.Host
+		if h, _, err := net.SplitHostPort(host); err == nil {
+			host = h
+		}
+		if !fn(host) {
+			return req, body, true
+		}
 	}
 
 	// Capture the current bypass reference once. This goroutine watches this

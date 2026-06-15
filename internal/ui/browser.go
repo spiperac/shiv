@@ -278,5 +278,6 @@ func showBrowserPickerDialog(fyneApp fyne.App, win fyne.Window, browsers []Detec
 			dialog.ShowError(err, win)
 		}
 	}, win)
+	closeOnEscape(win, d.Dismiss)
 	d.Show()
 }

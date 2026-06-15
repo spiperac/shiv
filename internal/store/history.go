@@ -3,9 +3,14 @@ package store
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/shiv/internal/events"
+	"github.com/shiv/internal/logger"
 )
 
 // Transaction is a matched HTTP request/response pair.
@@ -33,27 +38,34 @@ type Transaction struct {
 // TransactionFilter holds filter criteria for paginated history queries.
 // Zero values mean "no filter" for that field.
 type TransactionFilter struct {
-	Search       string // matched against host + url + method + status (case-insensitive)
-	Host         string // exact host match (from site map selection)
-	PathPrefix   string // URL path prefix filter (from site map selection)
-	ShowOutScope bool   // if false, only in_scope=1 rows are returned
+	Search       string   // matched against host + url + method + status (case-insensitive)
+	Host         string   // exact host match (from site map selection)
+	Port         int      // exact port match; 0 means no filter
+	PathPrefix   string   // URL path prefix filter (from site map selection)
+	ShowOutScope bool     // if false, only in_scope=1 rows are returned
+	Methods      []string // whitelist of HTTP methods; empty = all
+	StatusMin    int      // lower bound on status_code; 0 = no lower bound
+	StatusMax    int      // upper bound on status_code; 0 = no upper bound
+	HideStatic   bool     // if true, filter out common static asset extensions in memory
 }
 
 // PageSize is the number of rows returned per page.
 const PageSize = 100
 
-// SiteMapEntry is a minimal host+url pair used to build the site map at
-// startup. Only these two fields are needed — no headers, no bodies.
+// SiteMapEntry is a minimal host+port+url triplet used to build the site map
+// at startup. Port is required to differentiate apps on the same host at
+// different ports (e.g. localhost:3000 vs localhost:8080).
 type SiteMapEntry struct {
 	Host string
+	Port int
 	URL  string
 }
 
-// SiteMapEntries returns the host and url for every row in history.
+// SiteMapEntries returns the host, port, and url for every row in history.
 // Used once at startup to populate the site map with all historical
 // paths before the first page of transactions is displayed.
 func (s *Store) SiteMapEntries() ([]SiteMapEntry, error) {
-	rows, err := s.db.Query(`SELECT host, url FROM history ORDER BY id ASC`)
+	rows, err := s.db.Query(`SELECT host, port, url FROM history ORDER BY id ASC`)
 	if err != nil {
 		return nil, fmt.Errorf("store: site map entries: %w", err)
 	}
@@ -61,7 +73,7 @@ func (s *Store) SiteMapEntries() ([]SiteMapEntry, error) {
 	var entries []SiteMapEntry
 	for rows.Next() {
 		var e SiteMapEntry
-		if err := rows.Scan(&e.Host, &e.URL); err != nil {
+		if err := rows.Scan(&e.Host, &e.Port, &e.URL); err != nil {
 			return nil, fmt.Errorf("store: scan site map entry: %w", err)
 		}
 		entries = append(entries, e)
@@ -137,9 +149,14 @@ func (s *Store) Log(t Transaction) error {
 		t.ID = uint64(id)
 		t.Proto = proto
 		t.RespSize = respSize
+		// Guard against sending on a closed channel when the store is shutting down.
 		select {
-		case s.Updates <- t:
+		case <-s.done:
 		default:
+			select {
+			case s.Updates <- t:
+			default:
+			}
 		}
 		return nil
 	})
@@ -165,6 +182,10 @@ func (s *Store) TransactionsPage(beforeID uint64, filter TransactionFilter) ([]T
 	if filter.Host != "" {
 		conditions = append(conditions, "host = ?")
 		args = append(args, filter.Host)
+		if filter.Port != 0 {
+			conditions = append(conditions, "port = ?")
+			args = append(args, filter.Port)
+		}
 	}
 
 	if filter.PathPrefix != "" {
@@ -186,6 +207,24 @@ func (s *Store) TransactionsPage(beforeID uint64, filter TransactionFilter) ([]T
 		}
 	}
 
+	if len(filter.Methods) > 0 {
+		placeholders := make([]string, len(filter.Methods))
+		for i, m := range filter.Methods {
+			placeholders[i] = "?"
+			args = append(args, strings.ToUpper(m))
+		}
+		conditions = append(conditions, "method IN ("+strings.Join(placeholders, ",")+")")
+	}
+
+	if filter.StatusMin > 0 {
+		conditions = append(conditions, "status_code >= ?")
+		args = append(args, filter.StatusMin)
+	}
+	if filter.StatusMax > 0 {
+		conditions = append(conditions, "status_code <= ?")
+		args = append(args, filter.StatusMax)
+	}
+
 	query := `
 		SELECT id, timestamp, host, port, method, url, proto,
 		       req_headers, '' as req_body, status_code, resp_headers,
@@ -205,18 +244,40 @@ func (s *Store) TransactionsPage(beforeID uint64, filter TransactionFilter) ([]T
 	return scanTransactions(rows)
 }
 
-// TransactionsSince returns transactions with id > afterID, newest first,
-// capped at 200. Bodies are omitted. Used by pollMissed.
-func (s *Store) TransactionsSince(afterID uint64) ([]Transaction, error) {
-	rows, err := s.db.Query(`
+// SearchTransactions performs a full-text LIKE scan across request/response bodies
+// and/or headers. At least one of inReqBody, inRespBody, inHeaders must be true.
+// Results are ordered by id descending and capped at 200 rows.
+func (s *Store) SearchTransactions(term string, inReqBody, inRespBody, inHeaders bool) ([]Transaction, error) {
+	if term == "" || (!inReqBody && !inRespBody && !inHeaders) {
+		return nil, nil
+	}
+	like := "%" + term + "%"
+	var clauses []string
+	var args []any
+	if inReqBody {
+		clauses = append(clauses, "CAST(req_body AS TEXT) LIKE ?")
+		args = append(args, like)
+	}
+	if inRespBody {
+		clauses = append(clauses, "CAST(resp_body AS TEXT) LIKE ?")
+		args = append(args, like)
+	}
+	if inHeaders {
+		clauses = append(clauses, "req_headers LIKE ?")
+		args = append(args, like)
+		clauses = append(clauses, "resp_headers LIKE ?")
+		args = append(args, like)
+	}
+	query := `
 		SELECT id, timestamp, host, port, method, url, proto,
 		       req_headers, '' as req_body, status_code, resp_headers,
 		       '' as resp_body, duration_ms, tls, in_scope, resp_size
 		FROM history
-		WHERE id > ?
-		ORDER BY id DESC LIMIT 200`, afterID)
+		WHERE (` + strings.Join(clauses, " OR ") + `)
+		ORDER BY id DESC LIMIT 200`
+	rows, err := s.db.Query(query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("store: query history since %d: %w", afterID, err)
+		return nil, fmt.Errorf("store: search transactions: %w", err)
 	}
 	defer rows.Close()
 	return scanTransactions(rows)
@@ -286,6 +347,41 @@ func scanTransactions(rows interface {
 	return txs, rows.Err()
 }
 
+// ObserveResponse implements events.ResponseObserver. It splits e.Host
+// (which arrives as host:port from the proxy) into a pure hostname and integer
+// port once here — no downstream consumer ever parses host/port again.
+func (s *Store) ObserveResponse(e events.ResponseEvent) {
+	host, portStr, err := net.SplitHostPort(e.Host)
+	if err != nil {
+		host = e.Host
+		if e.TLS {
+			portStr = "443"
+		} else {
+			portStr = "80"
+		}
+	}
+	port, _ := strconv.Atoi(portStr)
+
+	if err := s.Log(Transaction{
+		Timestamp:   e.Timestamp,
+		Host:        host,
+		Port:        port,
+		Proto:       e.Proto,
+		Method:      e.Method,
+		URL:         e.URL,
+		ReqHeaders:  e.ReqHeaders,
+		ReqBody:     e.ReqBody,
+		StatusCode:  e.StatusCode,
+		RespHeaders: e.RespHeaders,
+		RespBody:    e.RespBody,
+		DurationMs:  e.DurationMs,
+		TLS:         e.TLS,
+		InScope:     s.InScope(host),
+	}); err != nil {
+		logger.Error("store: observe response: %v", err)
+	}
+}
+
 func boolToInt(b bool) int {
 	if b {
 		return 1
@@ -293,12 +389,12 @@ func boolToInt(b bool) int {
 	return 0
 }
 
-// DeleteTransactionsByHost deletes all history rows for the given host.
-func (s *Store) DeleteTransactionsByHost(host string) error {
+// DeleteTransactionsByHostPort deletes all history rows for the given host and port.
+func (s *Store) DeleteTransactionsByHostPort(host string, port int) error {
 	return s.write(func() error {
-		_, err := s.db.Exec(`DELETE FROM history WHERE host = ?`, host)
+		_, err := s.db.Exec(`DELETE FROM history WHERE host = ? AND port = ?`, host, port)
 		if err != nil {
-			return fmt.Errorf("store: delete transactions for host %s: %w", host, err)
+			return fmt.Errorf("store: delete transactions for %s:%d: %w", host, port, err)
 		}
 		return nil
 	})

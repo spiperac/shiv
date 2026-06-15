@@ -41,6 +41,9 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("store: open %s: %w", path, err)
 	}
 	db.SetMaxOpenConns(1)
+	if _, err := db.Exec(`PRAGMA journal_mode=WAL`); err != nil {
+		return nil, fmt.Errorf("store: enable WAL: %w", err)
+	}
 
 	projectStore := &Store{
 		db:                   db,
@@ -126,6 +129,7 @@ func (s *Store) migrate() error {
 		`ALTER TABLE history ADD COLUMN port INTEGER NOT NULL DEFAULT 443`,
 		`ALTER TABLE repeater_tabs ADD COLUMN tab_type TEXT NOT NULL DEFAULT 'http'`,
 		`ALTER TABLE history ADD COLUMN resp_size INTEGER NOT NULL DEFAULT 0`,
+		`CREATE INDEX IF NOT EXISTS idx_history_host_port_id ON history(host, port, id DESC)`,
 	}
 	for _, migration := range migrations {
 		s.db.Exec(migration)
@@ -231,5 +235,11 @@ CREATE TABLE IF NOT EXISTS plugins (
 	name    TEXT PRIMARY KEY,
 	path    TEXT NOT NULL DEFAULT '',
 	enabled INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE TABLE IF NOT EXISTS annotations (
+	history_id INTEGER PRIMARY KEY REFERENCES history(id) ON DELETE CASCADE,
+	comment    TEXT    NOT NULL DEFAULT '',
+	color      TEXT    NOT NULL DEFAULT ''
 );
 `

@@ -134,12 +134,13 @@ func ShowMainWindow(fyneApp fyne.App, projectStore *store.Store, bus *events.Bus
 	history := newHistoryTab(projectStore, mainWin, repeater, loot, intruder)
 	intercept := newInterceptTab(projectStore)
 	plugins := newPluginsTab(projectStore, bus, mainWin)
-
+	decoder := newDecoderTab()
 	tabs := container.NewAppTabs(
 		container.NewTabItemWithIcon("History", AppIcon("history"), history.build()),
 		container.NewTabItemWithIcon("Intercept", AppIcon("intercept"), intercept.build()),
 		container.NewTabItemWithIcon("Repeater", AppIcon("repeater"), repeater.build()),
 		container.NewTabItemWithIcon("Intruder", AppIcon("intruder"), intruder.build()),
+		container.NewTabItemWithIcon("Decoder", AppIcon("toolbox"), decoder.build()),
 		container.NewTabItemWithIcon("Loot", AppIcon("loot"), loot.build()),
 		container.NewTabItemWithIcon("Plugins", AppIcon("plugin"), plugins.build()),
 	)

@@ -2,6 +2,7 @@ package store
 
 import (
 	"fmt"
+	"net"
 	"strings"
 )
 
@@ -64,9 +65,9 @@ func (s *Store) DeleteScopeEntry(id int64) error {
 // example.com matches example.com and all subdomains.
 // Uses an in-memory cache populated on first call and invalidated on scope writes.
 func (s *Store) InScope(host string) bool {
-	// strip port if present
-	if idx := strings.LastIndex(host, ":"); idx >= 0 {
-		host = host[:idx]
+	// Strip port if present; net.SplitHostPort handles IPv6 brackets correctly.
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
 	}
 
 	s.scopeCacheMu.RLock()

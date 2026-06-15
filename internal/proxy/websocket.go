@@ -133,6 +133,7 @@ func (p *Proxy) handleWebSocketTLS(
 				if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
 					logger.Debug("ws: browser→upstream read for %s: %v", bareHost, err)
 				}
+				upstreamConn.Close()
 				return
 			}
 			result := p.bus.EmitWebSocketFrame(events.WebSocketFrameEvent{
@@ -157,6 +158,7 @@ func (p *Proxy) handleWebSocketTLS(
 				if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
 					logger.Debug("ws: upstream→browser read for %s: %v", bareHost, err)
 				}
+				browserConn.Close()
 				return
 			}
 			result := p.bus.EmitWebSocketFrame(events.WebSocketFrameEvent{
@@ -173,6 +175,7 @@ func (p *Proxy) handleWebSocketTLS(
 		}
 	}()
 
+	<-done
 	<-done
 	logger.Info("ws: closed %s%s", bareHost, req.URL.Path)
 }
