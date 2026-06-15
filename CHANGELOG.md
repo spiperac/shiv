@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.2](https://github.com/spiperac/shiv/compare/v1.0.1...v1.0.2) (2026-06-15)
+
+
+### Bug Fixes
+
+* appimage build fails, missing linuxdeploy ([7191882](https://github.com/spiperac/shiv/commit/7191882870cd1829ad9c6a5815113359891c64da))
+* appimage build fails, missing linuxdeploy ([c1b6cb9](https://github.com/spiperac/shiv/commit/c1b6cb9d75d3923dbc17d5e112ba90a63b946abb))
+* appimage build using linuxdeploy ([0526112](https://github.com/spiperac/shiv/commit/0526112304f8d32b61c7ee8ca71b56b5e73d1a1a))
+* appimage build using linuxdeploy ([0bab94c](https://github.com/spiperac/shiv/commit/0bab94c801f7ef825b4a2a95dd28a7d5215276b0))
+
 ## [1.0.1](https://github.com/spiperac/shiv/compare/v1.0.0...v1.0.1) (2026-06-15)
 
 
