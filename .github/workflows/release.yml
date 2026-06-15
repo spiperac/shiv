@@ -60,7 +60,7 @@ jobs:
           printf '[Desktop Entry]\nName=Shiv\nExec=shiv\nIcon=shiv\nType=Application\nCategories=Utility;\n' > AppDir/usr/share/applications/shiv.desktop
           ldd shiv | grep "=> /" | awk '{print $3}' | xargs -I{} cp -L {} AppDir/usr/lib/
           chmod +w AppDir/usr/lib/*.so*
-          ARCH=x86_64 fhs-run ./linuxdeploy --appdir AppDir --output appimage
+          ARCH=x86_64 ./linuxdeploy --appdir AppDir --output appimage
       - name: Upload AppImage
         uses: softprops/action-gh-release@v3
         with:
