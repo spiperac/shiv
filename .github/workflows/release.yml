@@ -1,99 +1,123 @@
-name: Release Build
+name: Release
+
 on:
-  release:
-    types: [created]
+  push:
+    branches:
+      - main
 
 permissions:
   contents: write
-  packages: write
+  pull-requests: write
 
 jobs:
-  build-linux:
+  release-please:
     runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: googleapis/release-please-action@v4
+        id: release
         with:
-          go-version: '1.21'
-      - name: Install Fyne
-        run: go install fyne.io/tools/cmd/fyne@latest
-      - name: Install Linux deps
-        run: sudo apt-get update && sudo apt-get install -y libgl1-mesa-dev xorg-dev
-      - name: Package for Linux
-        run: fyne package -os linux
-      - name: Upload to release
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ github.event.release.upload_url }}
-          asset_path: ./Shiv.tar.xz
-          asset_name: Shiv-linux.tar.xz
-          asset_content_type: application/x-xz
+          release-type: simple
 
-  build-windows:
+  test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
         with:
-          go-version: '1.21'
-      - name: Install MinGW
-        run: sudo apt-get update && sudo apt-get install -y gcc-mingw-w64-x86-64
+          go-version: '1.22'
+      - name: Install deps
+        run: sudo apt-get update && sudo apt-get install -y libgl1-mesa-dev xorg-dev
+      - name: Test
+        run: go test ./...
+      - name: Vet
+        run: go vet ./...
+
+  build-linux:
+    needs: [release-please, test]
+    if: needs.release-please.outputs.release_created
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.22'
+      - name: Install deps
+        run: sudo apt-get update && sudo apt-get install -y libgl1-mesa-dev xorg-dev wget
       - name: Install Fyne
         run: go install fyne.io/tools/cmd/fyne@latest
-      - name: Package for Windows
+      - name: Build
+        run: go build -o shiv .
+      - name: Download linuxdeploy
+        run: wget -qO linuxdeploy https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage && chmod +x linuxdeploy
+      - name: Build AppImage
         run: |
-          export CC=x86_64-w64-mingw32-gcc
-          fyne package -os windows
-      - uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          mkdir -p AppDir/usr/bin AppDir/usr/lib AppDir/usr/share/applications AppDir/usr/share/icons/hicolor/256x256/apps
+          cp shiv AppDir/usr/bin/
+          cp assets/logo.png AppDir/usr/share/icons/hicolor/256x256/apps/shiv.png
+          printf '[Desktop Entry]\nName=Shiv\nExec=shiv\nIcon=shiv\nType=Application\nCategories=Utility;\n' > AppDir/usr/share/applications/shiv.desktop
+          ldd shiv | grep "=> /" | awk '{print $3}' | xargs -I{} cp -L {} AppDir/usr/lib/
+          chmod +w AppDir/usr/lib/*.so*
+          ARCH=x86_64 fhs-run ./linuxdeploy --appdir AppDir --output appimage
+      - name: Upload AppImage
+        uses: softprops/action-gh-release@v3
         with:
-          upload_url: ${{ github.event.release.upload_url }}
-          asset_path: ./Shiv.exe
-          asset_name: Shiv-windows.exe
-          asset_content_type: application/vnd.microsoft.portable-executable
+          tag_name: ${{ needs.release-please.outputs.tag_name }}
+          files: Shiv-x86_64.AppImage
 
   build-macos:
+    needs: [release-please, test]
+    if: needs.release-please.outputs.release_created
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
         with:
-          go-version: '1.21'
+          go-version: '1.22'
       - name: Install Fyne
         run: go install fyne.io/tools/cmd/fyne@latest
-
-      - name: Package for macOS arm64
+      - name: Build arm64
         run: GOARCH=arm64 fyne package -os darwin
-
       - name: Move arm64 binary
         run: mv Shiv.app/Contents/MacOS/Shiv Shiv.app/Contents/MacOS/Shiv-arm64
-
-      - name: Package for macOS amd64
+      - name: Build amd64
         run: GOARCH=amd64 fyne package -os darwin
-
       - name: Move amd64 binary
         run: mv Shiv.app/Contents/MacOS/Shiv Shiv.app/Contents/MacOS/Shiv-amd64
-
-      - name: Create universal binary with lipo
+      - name: Create universal binary
         run: |
           lipo -create \
             Shiv.app/Contents/MacOS/Shiv-arm64 \
             Shiv.app/Contents/MacOS/Shiv-amd64 \
             -output Shiv.app/Contents/MacOS/Shiv
           rm Shiv.app/Contents/MacOS/Shiv-arm64 Shiv.app/Contents/MacOS/Shiv-amd64
-
-      - name: Zip the app
+      - name: Zip app
         run: zip -r Shiv-macos.zip Shiv.app
-
-      - name: Upload to release
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Upload
+        uses: softprops/action-gh-release@v3
         with:
-          upload_url: ${{ github.event.release.upload_url }}
-          asset_path: ./Shiv-macos.zip
-          asset_name: Shiv-macos.zip
-          asset_content_type: application/zip
+          tag_name: ${{ needs.release-please.outputs.tag_name }}
+          files: Shiv-macos.zip
+
+  build-windows:
+    needs: [release-please, test]
+    if: needs.release-please.outputs.release_created
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.22'
+      - name: Install MinGW and Fyne deps
+        run: sudo apt-get update && sudo apt-get install -y gcc-mingw-w64-x86-64 libgl1-mesa-dev xorg-dev
+      - name: Install Fyne
+        run: go install fyne.io/tools/cmd/fyne@latest
+      - name: Build
+        run: CC=x86_64-w64-mingw32-gcc GOOS=windows GOARCH=amd64 CGO_ENABLED=1 fyne package -os windows
+      - name: Upload
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ needs.release-please.outputs.tag_name }}
+          files: Shiv.exe
