@@ -45,7 +45,7 @@ jobs:
         with:
           go-version: '1.25'
       - name: Install deps
-        run: sudo apt-get update && sudo apt-get install -y libgl1-mesa-dev xorg-dev wget
+        run: sudo apt-get update && sudo apt-get install -y libgl1-mesa-dev xorg-dev wget libfuse2
       - name: Install Fyne
         run: go install fyne.io/tools/cmd/fyne@latest
       - name: Build
@@ -54,13 +54,11 @@ jobs:
         run: wget -qO linuxdeploy https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage && chmod +x linuxdeploy
       - name: Build AppImage
         run: |
-          mkdir -p AppDir/usr/bin AppDir/usr/lib AppDir/usr/share/applications AppDir/usr/share/icons/hicolor/256x256/apps
+          mkdir -p AppDir/usr/bin AppDir/usr/share/applications AppDir/usr/share/icons/hicolor/256x256/apps
           cp shiv AppDir/usr/bin/
           cp assets/logo.png AppDir/usr/share/icons/hicolor/256x256/apps/shiv.png
           printf '[Desktop Entry]\nName=Shiv\nExec=shiv\nIcon=shiv\nType=Application\nCategories=Utility;\n' > AppDir/usr/share/applications/shiv.desktop
-          ldd shiv | grep "=> /" | awk '{print $3}' | xargs -I{} cp -L {} AppDir/usr/lib/
-          chmod +w AppDir/usr/lib/*.so*
-          ARCH=x86_64 ./linuxdeploy --appdir AppDir --output appimage
+          ARCH=x86_64 ./linuxdeploy --appimage-extract-and-run --appdir AppDir --output appimage
       - name: Upload AppImage
         uses: softprops/action-gh-release@v3
         with:
