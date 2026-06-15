@@ -124,6 +124,7 @@ func (l *lootTab) build() fyne.CanvasObject {
 						}
 						if err := l.projectStore.DeleteLoot(entry.ID); err != nil {
 							logger.Error("loot: delete: %v", err)
+							dialog.ShowError(err, l.win)
 							return
 						}
 						l.selectedIdx = -1
@@ -160,6 +161,7 @@ func (l *lootTab) build() fyne.CanvasObject {
 			}
 			if err := l.projectStore.DeleteLoot(entry.ID); err != nil {
 				logger.Error("loot: delete: %v", err)
+				dialog.ShowError(err, l.win)
 				return
 			}
 			l.selectedIdx = -1

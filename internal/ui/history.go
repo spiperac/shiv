@@ -545,6 +545,7 @@ func (h *historyTab) deleteSelectedHost() {
 	}
 	if err := h.projectStore.DeleteTransactionsByHostPort(host, port); err != nil {
 		logger.Error("history: delete %s:%d: %v", host, port, err)
+		dialog.ShowError(err, h.win)
 		return
 	}
 	h.siteMap.mu.Lock()
@@ -822,6 +823,7 @@ func (h *historyTab) loadAnnotations() {
 func (h *historyTab) clearHistory() {
 	if err := h.projectStore.ClearHistory(); err != nil {
 		logger.Error("clear history: %v", err)
+		dialog.ShowError(err, h.win)
 		return
 	}
 	h.mu.Lock()
@@ -1226,6 +1228,7 @@ func (h *historyTab) showCommentDialog(historyID uint64) {
 			a.Comment = entry.Text
 			if err := h.projectStore.SetAnnotation(a); err != nil {
 				logger.Error("history: set annotation comment: %v", err)
+				dialog.ShowError(err, h.win)
 				return
 			}
 			h.annotationsMu.Lock()
@@ -1263,6 +1266,7 @@ func (h *historyTab) showHighlightMenu(historyID uint64) {
 			a.Color = hc.color
 			if err := h.projectStore.SetAnnotation(a); err != nil {
 				logger.Error("history: set annotation color: %v", err)
+				dialog.ShowError(err, h.win)
 				return
 			}
 			h.annotationsMu.Lock()
